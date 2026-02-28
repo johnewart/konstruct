@@ -39,12 +39,22 @@ import { IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react';
 
 // Git changes list component
 function GitChangesList() {
+  // Use a ref to track if the component is mounted/visible
+  // This helps reduce unnecessary queries when the accordion is closed
+  const [queryKey, setQueryKey] = useState(0);
+  
   const { data: isGitAvailable } = trpc.git.isAvailable.useQuery();
   const { data: gitChanges, isLoading: gitLoading, isError } =
     trpc.git.getChangedFiles.useQuery(undefined, {
       refetchInterval: 1000, // Auto-refresh every second
-      enabled: isGitAvailable !== false, // Only run if git is available
+      enabled: isGitAvailable !== false && queryKey > 0, // Only run if git available and component active
     });
+  
+  // Only start refetching when component mounts
+  useEffect(() => {
+    setQueryKey(1);
+    return () => setQueryKey(0);
+  }, []);
 
   if (isError) {
     // Don't show error in UI - just return empty to avoid cluttering
@@ -144,6 +154,9 @@ function estimateMessageTokens(msg: ChatMsg): number {
   return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
 }
 
+// Limit work log entries to prevent performance issues with long conversations
+const MAX_WORK_LOG_MESSAGES = 200;
+
 function buildWorkLogEntries(messages: ChatMsg[]): Array<{
   type: 'status' | 'tool';
   description?: string;
@@ -151,6 +164,9 @@ function buildWorkLogEntries(messages: ChatMsg[]): Array<{
   resultSummary?: string;
   pending?: boolean;
 }> {
+  // Limit messages processed for work log to prevent performance issues
+  const messagesToProcess = messages.slice(-MAX_WORK_LOG_MESSAGES);
+  
   const entries: Array<{
     type: 'status' | 'tool';
     description?: string;
@@ -158,8 +174,8 @@ function buildWorkLogEntries(messages: ChatMsg[]): Array<{
     resultSummary?: string;
     pending?: boolean;
   }> = [];
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
+  for (let i = 0; i < messagesToProcess.length; i++) {
+    const msg = messagesToProcess[i];
     if (msg.role !== 'assistant' || !msg.toolCalls?.length) continue;
     for (const tc of msg.toolCalls) {
       let args: { description?: string } = {};
@@ -178,8 +194,8 @@ function buildWorkLogEntries(messages: ChatMsg[]): Array<{
         continue;
       }
       let resultSummary = '';
-      for (let j = i + 1; j < messages.length; j++) {
-        const m = messages[j] as ChatMsg;
+      for (let j = i + 1; j < messagesToProcess.length; j++) {
+        const m = messagesToProcess[j] as ChatMsg;
         if (m.role === 'tool' && m.toolCallId === tc.id) {
           const content = m.content;
           resultSummary =
@@ -192,6 +208,14 @@ function buildWorkLogEntries(messages: ChatMsg[]): Array<{
   }
   return entries;
 }
+
+// Message queue type
+type QueuedMessage = {
+  id: string;
+  content: string;
+  attachments: PlanAttachment[];
+  timestamp: number;
+};
 
 export function Chat() {
   const { sessionId } = useParams<{ sessionId?: string }>();
@@ -217,6 +241,8 @@ export function Chat() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitleInHeader, setEditingTitleInHeader] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
+  // Message queue state
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
 
   type PlanAttachment = { type: 'plan'; name: string; content: string };
   const [attachmentsBySession, setAttachmentsBySession] = useState<
@@ -239,6 +265,7 @@ export function Chat() {
   const sendAbortRef = useRef<AbortController | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const workLogRef = useRef<HTMLDivElement | null>(null);
+  const todoListRef = useRef<HTMLUListElement | null>(null);
   const statusBoxRef = useRef<HTMLDivElement | null>(null);
   const runWasInProgressRef = useRef(false);
   type LiveProgress = {
@@ -496,6 +523,14 @@ export function Chat() {
     return () => clearTimeout(t);
   }, [runPendingSince]);
 
+  const isRunInProgress =
+    !runCancelled &&
+    (waitingForRunStart ||
+      (liveProgressFromStream ? liveProgressFromStream.running : false) ||
+      sendMessage.isPending ||
+      runProgress?.running === true);
+  const statusText = isRunInProgress ? 'Sending…' : 'Ready';
+
   const { data: contextData, isLoading: contextLoading } =
     trpc.chat.getContext.useQuery(
       { sessionId: sessionId!, modeId },
@@ -549,15 +584,10 @@ export function Chat() {
     },
   });
 
-  // Custom hook to fetch plan content
-  const usePlanContent = (planName: string | null) => {
-    return trpc.chat.getPlanContent.useQuery(
-      { name: planName! },
-      { enabled: !!planName }
-    );
-  };
-
-  const planContentQuery = usePlanContent(planToAttach);
+  const planContentQuery = trpc.chat.getPlanContent.useQuery(
+    { name: planToAttach! },
+    { enabled: !!planToAttach }
+  );
 
   // Effect: when dropped plan content is loaded, add to attachments
   useEffect(() => {
@@ -572,7 +602,7 @@ export function Chat() {
       });
       setPlanToAttach(null);
     }
-  }, [planContentQuery.data, planToAttach]);
+  }, [planContentQuery.data, planToAttach, setAttachments]);
 
   const createSession = trpc.sessions.create.useMutation({
     onSuccess: (s) => {
@@ -616,6 +646,20 @@ export function Chat() {
       const text = input.trim();
       if (!text || !sessionId) return;
 
+      // If agent is running, queue the message instead of sending immediately
+      if (isRunInProgress) {
+        const queuedMsg: QueuedMessage = {
+          id: crypto.randomUUID(),
+          content: buildMessageContent(text),
+          attachments: [...attachments],
+          timestamp: Date.now(),
+        };
+        setQueuedMessages((prev) => [...prev, queuedMsg]);
+        setInput('');
+        setAttachments([]);
+        return;
+      }
+
       sendAbortRef.current?.abort();
       const controller = new AbortController();
       sendAbortRef.current = controller;
@@ -640,6 +684,8 @@ export function Chat() {
       selectedRunpodModelId,
       sendMessage,
       buildMessageContent,
+      isRunInProgress,
+      attachments,
     ]
   );
 
@@ -691,13 +737,6 @@ export function Chat() {
       })),
     ];
   }, [workLogEntriesFromMessages, runProgressEntries]);
-  const isRunInProgress =
-    !runCancelled &&
-    (waitingForRunStart ||
-      (liveProgressFromStream ? liveProgressFromStream.running : false) ||
-      sendMessage.isPending ||
-      runProgress?.running === true);
-  const statusText = isRunInProgress ? 'Sending…' : 'Ready';
 
   useEffect(() => {
     const el = chatMessagesRef.current;
@@ -716,6 +755,16 @@ export function Chat() {
     });
     return () => cancelAnimationFrame(id);
   }, [workLogEntries.length]);
+
+  // Keep todo list scrolled to bottom when new todos are added
+  useEffect(() => {
+    const el = todoListRef.current;
+    if (!el) return;
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [todos.length]);
 
   // Keep tool status box scrolled to bottom so "Thinking…" is always visible
   useEffect(() => {
@@ -1191,181 +1240,7 @@ export function Chat() {
                 </h1>
               )}
               <div className="chat-header__controls">
-                {providerId === 'runpod' && defaultPodId && runpodIsRunning && (
-                  <Select
-                    size="xs"
-                    value={selectedRunpodModelId ?? runpodModels[0]?.id ?? null}
-                    onChange={(v) => {
-                      if (v) {
-                        setSelectedRunpodModelId(v);
-                        localStorage.setItem(RUNPOD_CHAT_MODEL_KEY, v);
-                      }
-                    }}
-                    data={runpodModels.map((m) => ({
-                      value: m.id,
-                      label: m.id,
-                    }))}
-                    placeholder={
-                      runpodModels.length === 0 ? 'Loading…' : 'Model'
-                    }
-                    aria-label="RunPod model"
-                    title="RunPod model"
-                    allowDeselect={false}
-                    style={{ minWidth: 160 }}
-                  />
-                )}
-                {providers && providers.length > 0 && (
-                  <Select
-                    size="xs"
-                    value={providerId ?? null}
-                    onChange={(v) => {
-                      const id = v ?? '';
-                      setProviderId(id);
-                      if (typeof window !== 'undefined' && id)
-                        localStorage.setItem(CHAT_PROVIDER_KEY, id);
-                    }}
-                    data={providers.map((p) => ({
-                      value: p.id,
-                      label:
-                        'configured' in p && !p.configured
-                          ? `${p.name} (set API key)`
-                          : p.name,
-                    }))}
-                    aria-label="LLM provider"
-                    title="LLM provider"
-                    allowDeselect={false}
-                    style={{ minWidth: 140 }}
-                  />
-                )}
-                {providerId === 'runpod' && (
-                  <Group gap="xs" wrap="nowrap">
-                    {!defaultPodId ? (
-                      <Text size="xs" c="dimmed" component={Link} to="/runpod">
-                        Set default pod on RunPod page
-                      </Text>
-                    ) : runpodConfigMissing ? (
-                      <Text size="xs" c="dimmed" component={Link} to="/runpod">
-                        Configure RunPod (API key) on RunPod page
-                      </Text>
-                    ) : (
-                      <>
-                        <Text size="xs" c="dimmed">
-                          {getPodsMutation.isPending
-                            ? '…'
-                            : defaultPod
-                              ? runpodIsRunning
-                                ? 'Running'
-                                : (defaultPod.status ?? 'Unknown')
-                              : 'Default pod not found'}
-                        </Text>
-                        {runpodIsRunning &&
-                          (runpodV1Fetching && runpodV1Connectivity == null ? (
-                            <Text size="xs" c="dimmed">
-                              Checking…
-                            </Text>
-                          ) : runpodV1Connectivity?.reachable === true ? (
-                            <Text size="xs" c="green">
-                              · Connected
-                            </Text>
-                          ) : runpodV1Connectivity?.reachable === false ? (
-                            <Text size="xs" c="red">
-                              · Unreachable
-                            </Text>
-                          ) : null)}
-                        {runpodCanStart && (
-                          <Tooltip label="Start default pod">
-                            <ActionIcon
-                              size="sm"
-                              color="green"
-                              variant="light"
-                              onClick={() => {
-                                const raw =
-                                  localStorage.getItem(RUNPOD_CONFIG_KEY);
-                                if (!raw) return;
-                                const config = JSON.parse(raw) as {
-                                  apiKey: string;
-                                  endpoint?: string;
-                                };
-                                if (config?.apiKey && defaultPodId)
-                                  startPodMutation.mutate(
-                                    {
-                                      apiKey: config.apiKey,
-                                      endpoint: config.endpoint,
-                                      podId: defaultPodId,
-                                    },
-                                    {
-                                      onSuccess: () => {
-                                        getPodsMutation.mutate(
-                                          {
-                                            apiKey: config.apiKey,
-                                            endpoint: config.endpoint,
-                                          },
-                                          {
-                                            onSuccess: (r) =>
-                                              r.success &&
-                                              r.pods &&
-                                              setRunpodPods(r.pods),
-                                          }
-                                        );
-                                      },
-                                    }
-                                  );
-                              }}
-                              loading={startPodMutation.isPending}
-                            >
-                              <IconPlayerPlay size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                        )}
-                        {runpodCanStop && (
-                          <Tooltip label="Stop default pod">
-                            <ActionIcon
-                              size="sm"
-                              color="yellow"
-                              variant="light"
-                              onClick={() => {
-                                const raw =
-                                  localStorage.getItem(RUNPOD_CONFIG_KEY);
-                                if (!raw) return;
-                                const config = JSON.parse(raw) as {
-                                  apiKey: string;
-                                  endpoint?: string;
-                                };
-                                if (config?.apiKey && defaultPodId)
-                                  stopPodMutation.mutate(
-                                    {
-                                      apiKey: config.apiKey,
-                                      endpoint: config.endpoint,
-                                      podId: defaultPodId,
-                                    },
-                                    {
-                                      onSuccess: () => {
-                                        getPodsMutation.mutate(
-                                          {
-                                            apiKey: config.apiKey,
-                                            endpoint: config.endpoint,
-                                          },
-                                          {
-                                            onSuccess: (r) =>
-                                              r.success &&
-                                              r.pods &&
-                                              setRunpodPods(r.pods),
-                                          }
-                                        );
-                                      },
-                                    }
-                                  );
-                              }}
-                              loading={stopPodMutation.isPending}
-                            >
-                              <IconPlayerStop size={14} />
-                            </ActionIcon>
-                          </Tooltip>
-                        )}
-                      </>
-                    )}
-                  </Group>
-                )}
+                {/* Model/Provider and RunPod status moved to top navigation */}
                 <Button
                   variant="subtle"
                   size="xs"
@@ -1470,7 +1345,8 @@ export function Chat() {
             >
               <div className="chat-messages-wrap">
                 <div className="chat-messages" ref={chatMessagesRef}>
-                  {displayMessagesWithPending.map((msg, i) => (
+                  {/* Limit messages to prevent UI slowdown with long conversations */}
+                  {displayMessagesWithPending.slice(-100).map((msg, i) => (
                     <ChatMessage key={i} message={msg} compact />
                   ))}
                   {isRunInProgress && (
@@ -1565,8 +1441,42 @@ export function Chat() {
                     <Accordion.Control>
                       <h3 className="chat-panel-section__title">Todos</h3>
                     </Accordion.Control>
-                    <Accordion.Panel>
-                      <ul className="chat-todos">
+                    <Accordion.Panel
+                      style={{
+                        padding: '8px 0',
+                      }}
+                    >
+                      {/* Add todo form - always visible at top */}
+                      <form
+                        className="chat-todos-add"
+                        onSubmit={handleAddTodo}
+                        style={{
+                          display: 'flex',
+                          gap: 8,
+                          alignItems: 'stretch',
+                          marginBottom: '8px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <TextInput
+                          placeholder="Add a todo…"
+                          value={todoInput}
+                          onChange={(e) => setTodoInput(e.currentTarget.value)}
+                          disabled={addTodo.isPending}
+                          size="xs"
+                          style={{ flex: 1 }}
+                        />
+                        <Button
+                          type="submit"
+                          size="xs"
+                          disabled={addTodo.isPending || !todoInput.trim()}
+                        >
+                          Add
+                        </Button>
+                      </form>
+
+                      {/* Scrollable todo list */}
+                      <ul className="chat-todos" ref={todoListRef}>
                         {todos.map((t) => (
                           <li key={t.id} className="chat-todos__item">
                             <span
@@ -1619,31 +1529,6 @@ export function Chat() {
                           </li>
                         ))}
                       </ul>
-                      <form
-                        className="chat-todos-add"
-                        onSubmit={handleAddTodo}
-                        style={{
-                          display: 'flex',
-                          gap: 8,
-                          alignItems: 'stretch',
-                        }}
-                      >
-                        <TextInput
-                          placeholder="Add a todo…"
-                          value={todoInput}
-                          onChange={(e) => setTodoInput(e.currentTarget.value)}
-                          disabled={addTodo.isPending}
-                          size="xs"
-                          style={{ flex: 1 }}
-                        />
-                        <Button
-                          type="submit"
-                          size="xs"
-                          disabled={addTodo.isPending || !todoInput.trim()}
-                        >
-                          Add
-                        </Button>
-                      </form>
                     </Accordion.Panel>
                   </Accordion.Item>
 
@@ -1756,6 +1641,90 @@ export function Chat() {
                       }}
                     >
                       <GitChangesList />
+                    </Accordion.Panel>
+                  </Accordion.Item>
+
+                  <Accordion.Item value="queued-messages">
+                    <Accordion.Control>
+                      <h3 className="chat-panel-section__title">
+                        Queued Messages ({queuedMessages.length})
+                      </h3>
+                    </Accordion.Control>
+                    <Accordion.Panel
+                      style={{
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        padding: '8px 0',
+                      }}
+                    >
+                      <div className="chat-queued-messages">
+                        {queuedMessages.length === 0 ? (
+                          <p className="chat-panel-empty">
+                            No messages queued. Type in the box and press Enter
+                            to queue while agent is working.
+                          </p>
+                        ) : (
+                          <ul className="chat-queued-messages__list">
+                            {queuedMessages.map((msg, i) => (
+                              <li
+                                key={msg.id}
+                                className="chat-queued-messages__item"
+                              >
+                                <span className="chat-queued-messages__content">
+                                  {msg.content}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="subtle"
+                                  size="compact-xs"
+                                  color="red"
+                                  onClick={() =>
+                                    setQueuedMessages((prev) =>
+                                      prev.filter((_, idx) => idx !== i)
+                                    )
+                                  }
+                                  title="Remove from queue"
+                                  aria-label="Remove from queue"
+                                >
+                                  ×
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {queuedMessages.length > 0 && (
+                          <div className="chat-queued-messages__actions">
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="subtle"
+                              onClick={() => {
+                                // Send all queued messages
+                                queuedMessages.forEach((msg) => {
+                                  sendMessage.mutate({
+                                    sessionId: sessionId!,
+                                    content: buildMessageContent(
+                                      msg.content
+                                    ),
+                                    modeId,
+                                    providerId: providerId ?? 'openai',
+                                    ...(providerId === 'runpod' &&
+                                    selectedRunpodModelId
+                                      ? { model: selectedRunpodModelId }
+                                      : {}),
+                                  });
+                                  // Clear attachments after sending
+                                  setAttachments([]);
+                                });
+                                setQueuedMessages([]);
+                              }}
+                              disabled={isRunInProgress || !queuedMessages.length}
+                            >
+                              Send All
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </Accordion.Panel>
                   </Accordion.Item>
                 </Accordion>

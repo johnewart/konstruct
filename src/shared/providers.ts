@@ -204,3 +204,78 @@ export function getAllProviders(projectRoot: string): {
       : 'openai';
   return { providers, defaultProviderId };
 }
+
+/** Update the default provider in the config file. */
+export function setDefaultProvider(providerId: string, projectRoot: string): void {
+  const { loadConfig, getProjectConfigPath, getGlobalConfigPath } = require('./config');
+  const fs = require('fs');
+  const path = require('path');
+  const { parse, stringify } = require('yaml');
+
+  // Determine which config file to update
+  let configPath: string;
+  const projectPath = getProjectConfigPath(projectRoot);
+  
+  if (projectRoot && fs.existsSync(projectPath)) {
+    configPath = projectPath;
+  } else {
+    configPath = getGlobalConfigPath();
+  }
+
+  // Load existing config
+  let config: any = {};
+  if (fs.existsSync(configPath)) {
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      const parsed = parse(content);
+      if (parsed && typeof parsed === 'object') {
+        config = parsed;
+      }
+    } catch (e) {
+      // If parsing fails, start with empty config
+    }
+  }
+
+  // Ensure llm object exists
+  if (!config.llm) {
+    config.llm = {};
+  }
+
+  // Update provider
+  config.llm.provider = providerId;
+
+  // Write back to file
+  const yamlContent = stringify(config);
+  fs.writeFileSync(configPath, yamlContent, 'utf-8');
+}
+
+/** Update the default provider in the config file. */
+export function setDefaultProvider(providerId: string, projectRoot: string): void {
+  const { loadConfig, updateConfig } = require('./config');
+  const config = loadConfig(projectRoot);
+  
+  // Validate provider
+  const validProviders = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
+  if (!validProviders.includes(providerId)) {
+    throw new Error(`Invalid provider: ${providerId}`);
+  }
+  
+  // Update config
+  config.llm.provider = providerId;
+  updateConfig(config, projectRoot);
+}
+
+/** Update the default provider in the config file. */
+export function setDefaultProvider(providerId: string, projectRoot: string): void {
+  const { loadConfig, saveConfig } = require('./config');
+  const config = loadConfig(projectRoot);
+  
+  // Validate provider
+  const validProviders = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
+  if (!validProviders.includes(providerId)) {
+    throw new Error(`Invalid provider: ${providerId}. Must be one of: ${validProviders.join(', ')}`);
+  }
+  
+  config.llm.provider = providerId;
+  saveConfig(config, projectRoot);
+}

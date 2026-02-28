@@ -1175,8 +1175,12 @@ body {
 /* Todo styles */
 .chat-todos {
   list-style: none;
-  margin: 0 0 10px 0;
-  padding: 0;
+  margin: 0;
+  padding: 0 8px;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  max-height: 250px;
 }
 
 .chat-todos__item {
@@ -1228,6 +1232,45 @@ body {
   flex-shrink: 0;
   display: flex;
   gap: 4px;
+}
+
+/* Queued messages styles */
+.chat-queued-messages {
+  font-size: 0.85em;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.chat-queued-messages__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-queued-messages__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  background: var(--app-surface);
+  border-radius: 6px;
+  border-left: 3px solid var(--app-accent-2);
+}
+
+.chat-queued-messages__content {
+  flex: 1;
+  font-size: 0.9em;
+  color: var(--app-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-queued-messages__actions {
+  margin-top: 8px;
+  text-align: center;
 }
 
 .chat-todos__btn {

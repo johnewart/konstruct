@@ -33,10 +33,12 @@ export default defineConfig({
       "/trpc": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        timeout: 600_000, // 10 min so chat.sendMessage (agent run) does not socket hang up
       },
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        timeout: 60_000,
       },
       "/agent-stream": {
         target: "http://localhost:3001",

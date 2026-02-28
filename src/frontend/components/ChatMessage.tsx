@@ -18,6 +18,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Tooltip } from './Tooltip';
 import './Tooltip.css';
+import React from 'react';
 
 type Message = {
   role: string;
@@ -28,7 +29,7 @@ type Message = {
   }>;
 };
 
-export function ChatMessage({
+export const ChatMessage = React.memo(function ChatMessage({
   message,
   compact = true,
 }: {
@@ -101,4 +102,4 @@ export function ChatMessage({
       </div>
     </div>
   );
-}
+});

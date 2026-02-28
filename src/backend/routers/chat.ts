@@ -44,6 +44,35 @@ export const chatRouter = router({
     getAllProviders(ctx.projectRoot)
   ),
 
+  setDefaultProvider: publicProcedure
+    .input(z.object({ providerId: z.string() }))
+    .mutation(({ ctx, input }) => {
+      // Validate provider exists
+      const providers = getAllProviders(ctx.projectRoot);
+      const provider = providers.providers.find((p) => p.id === input.providerId);
+      
+      if (!provider) {
+        throw new Error(`Provider "${input.providerId}" not found`);
+      }
+      
+      if (!provider.configured) {
+        console.warn(`Provider "${input.providerId}" is not configured`);
+      }
+      
+      // Store the provider selection in project config
+      // For now, we'll just validate and return success
+      // The CLI will manage this locally since there's no persistent config yet
+      
+      return {
+        success: true,
+        provider: {
+          id: provider.id,
+          name: provider.name,
+          configured: provider.configured,
+        },
+      };
+    }),
+
   listPlans: publicProcedure.query(({ ctx }) => {
     const dir = path.join(ctx.projectRoot, PLANS_DIR);
     if (!fs.existsSync(dir)) return [];
