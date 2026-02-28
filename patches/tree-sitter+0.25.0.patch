@@ -1,0 +1,21 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -1,7 +1,13 @@
+-const binding = typeof process.versions.bun === "string" ?
+-    // Statically analyzable enough for `bun build --compile` to embed the tree-sitter.node napi addon
+-    require(`./prebuilds/${process.platform}-${process.arch}/tree-sitter.node`) :
+-    require('node-gyp-build')(__dirname);
++let binding;
++if (typeof process.versions.bun === "string") {
++  try {
++    binding = require(`./prebuilds/${process.platform}-${process.arch}/tree-sitter.node`);
++  } catch (_) {
++    binding = require('node-gyp-build')(__dirname);
++  }
++} else {
++  binding = require('node-gyp-build')(__dirname);
++}
+ const {Query, Parser, NodeMethods, Tree, TreeCursor, LookaheadIterator} = binding;
+ 
+ const util = require('util');

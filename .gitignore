@@ -1,0 +1,14 @@
+code_assist
+.code_assist
+debug.log
+.konstruct/
+coverage/
+*.log
+node_modules/
+dist/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local

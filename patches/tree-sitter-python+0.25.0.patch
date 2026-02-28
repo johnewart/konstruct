@@ -1,0 +1,25 @@
+diff --git a/bindings/node/index.js b/bindings/node/index.js
+--- a/bindings/node/index.js
++++ b/bindings/node/index.js
+@@ -1,10 +1,16 @@
+ const root = require("path").join(__dirname, "..", "..");
+ 
+-module.exports =
+-  typeof process.versions.bun === "string"
+-    // Support `bun build --compile` by being statically analyzable enough to find the .node file at build-time
+-    ? require(`../../prebuilds/${process.platform}-${process.arch}/tree-sitter-python.node`)
+-    : require("node-gyp-build")(root);
++let binding;
++if (typeof process.versions.bun === "string") {
++  try {
++    binding = require(`../../prebuilds/${process.platform}-${process.arch}/tree-sitter-python.node`);
++  } catch (_) {
++    binding = require("node-gyp-build")(root);
++  }
++} else {
++  binding = require("node-gyp-build")(root);
++}
++module.exports = binding;
+ 
+ try {
+   module.exports.nodeTypeInfo = require("../../src/node-types.json");
