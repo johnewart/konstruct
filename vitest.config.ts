@@ -35,8 +35,8 @@ export default defineConfig({
       include: ['src/**/*.{ts,tsx}'],
       exclude: [
         'src/**/*.d.ts',
-        'src/server/index.ts',
-        'src/client/main.tsx',
+        'src/backend/index.ts',
+        'src/frontend/main.tsx',
         'node_modules/',
       ],
     },

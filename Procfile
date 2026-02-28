@@ -1,3 +1,3 @@
-web: bun --watch src/server/index.ts
+web: bun --watch src/backend/index.ts
 ui: bun run vite
-agent: bun run src/server/agent-worker.ts
+agent: bun run src/agent/agent-worker.ts
