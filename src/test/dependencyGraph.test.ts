@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildDependencyGraph } from '../server/services/dependencyGraph';
+import { buildDependencyGraph } from '../shared/dependencyGraph';
 
 // Helper function to read test files
 function readTestFile(filename: string): string {

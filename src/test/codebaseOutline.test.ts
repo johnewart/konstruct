@@ -17,11 +17,11 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { outlineFile, outlinePath } from '../server/services/codebaseOutline';
+import { outlineFile, outlinePath } from '../shared/codebaseOutline';
 import {
-  DependencyGraph,
+  type DependencyGraph,
   buildDependencyGraph,
-} from '../server/services/dependencyGraph';
+} from '../shared/dependencyGraph';
 
 // Helper function to read test files
 function readTestFile(filename: string): string {

@@ -14,7 +14,17 @@
  * limitations under the License.
  */
 
-import { createTRPCReact } from '@trpc/react-query';
-import type { AppRouter } from '../backend/trpc/router';
+import { router } from './trpc';
+import { documentsRouter } from '../routers/documents';
+import { sessionsRouter } from '../routers/sessions';
+import { chatRouter } from '../routers/chat';
+import { runpodRouter } from '../routers/runpod';
 
-export const trpc = createTRPCReact<AppRouter>();
+export const appRouter = router({
+  documents: documentsRouter,
+  sessions: sessionsRouter,
+  chat: chatRouter,
+  runpod: runpodRouter,
+});
+
+export type AppRouter = typeof appRouter;
