@@ -37,6 +37,88 @@ import {
 } from '@mantine/core';
 import { IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react';
 
+// Git changes list component
+function GitChangesList() {
+  const { data: isGitAvailable } = trpc.git.isAvailable.useQuery();
+  const { data: gitChanges, isLoading: gitLoading, isError } =
+    trpc.git.getChangedFiles.useQuery(undefined, {
+      refetchInterval: 1000, // Auto-refresh every second
+      enabled: isGitAvailable !== false, // Only run if git is available
+    });
+
+  if (isError) {
+    // Don't show error in UI - just return empty to avoid cluttering
+    return <p className="chat-panel-empty">No changes detected.</p>;
+  }
+
+  if (gitLoading || !isGitAvailable) {
+    return <p className="chat-panel-empty">Checking git status…</p>;
+  }
+
+  if (!gitChanges || gitChanges.length === 0) {
+    return <p className="chat-panel-empty">No changes yet.</p>;
+  }
+
+  return (
+    <div className="chat-git-changes">
+      <ul className="chat-git-changes__list">
+        {gitChanges.map((change, i) => (
+          <li key={i} className="chat-git-changes__item">
+            <span className="chat-git-changes__path">{change.path}</span>
+            <span
+              className={`chat-git-changes__status git-status--${change.status}`}
+              title={getStatusTitle(change.status)}
+            >
+              {getStatusIcon(change.status)}
+            </span>
+            <span className="chat-git-changes__stats">
+              +{change.added} -{change.removed}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function getStatusTitle(status: string): string {
+  switch (status) {
+    case 'M':
+      return 'Modified';
+    case 'A':
+      return 'Added';
+    case 'D':
+      return 'Deleted';
+    case 'R':
+      return 'Renamed';
+    case 'C':
+      return 'Copied';
+    case '??':
+      return 'Untracked';
+    default:
+      return 'Unknown';
+  }
+}
+
+function getStatusIcon(status: string): string {
+  switch (status) {
+    case 'M':
+      return 'M';
+    case 'A':
+      return 'A';
+    case 'D':
+      return 'D';
+    case 'R':
+      return 'R';
+    case 'C':
+      return 'C';
+    case '??':
+      return '?';
+    default:
+      return '?';
+  }
+}
+
 const MAX_CONTEXT_TOKENS = 200_000;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_000;
@@ -1659,6 +1741,21 @@ export function Chat() {
                             ))
                         )}
                       </div>
+                    </Accordion.Panel>
+                  </Accordion.Item>
+
+                  <Accordion.Item value="git-changes">
+                    <Accordion.Control>
+                      <h3 className="chat-panel-section__title">Git Changes</h3>
+                    </Accordion.Control>
+                    <Accordion.Panel
+                      style={{
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        padding: '8px 0',
+                      }}
+                    >
+                      <GitChangesList />
                     </Accordion.Panel>
                   </Accordion.Item>
                 </Accordion>

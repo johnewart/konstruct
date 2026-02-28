@@ -1094,6 +1094,85 @@ body {
   overflow: hidden;
 }
 
+/* Git changes tracking */
+.chat-git-changes {
+  font-size: 0.85em;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.chat-git-changes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-git-changes__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  background: var(--app-surface);
+  border-radius: 6px;
+  border-left: 3px solid var(--app-border-2);
+}
+
+.chat-git-changes__path {
+  flex: 1;
+  font-family: 'Satoshi', monospace;
+  font-size: 0.9em;
+  color: var(--app-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-git-changes__status {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+  font-weight: 600;
+  border-radius: 4px;
+  color: var(--mantine-color-white);
+}
+
+.chat-git-changes__status.git-status--M {
+  background: var(--mantine-color-yellow-6);
+}
+
+.chat-git-changes__status.git-status--A {
+  background: var(--mantine-color-green-6);
+}
+
+.chat-git-changes__status.git-status--D {
+  background: var(--mantine-color-red-6);
+}
+
+.chat-git-changes__status.git-status--R {
+  background: var(--mantine-color-blue-6);
+}
+
+.chat-git-changes__status.git-status--C {
+  background: var(--mantine-color-purple-6);
+}
+
+.chat-git-changes__status.git-status--?? {
+  background: var(--mantine-color-gray-6);
+}
+
+.chat-git-changes__stats {
+  font-family: monospace;
+  font-size: 0.85em;
+  color: var(--app-text-muted-2);
+}
+
+/* Todo styles */
 .chat-todos {
   list-style: none;
   margin: 0 0 10px 0;

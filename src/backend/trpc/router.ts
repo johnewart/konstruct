@@ -19,12 +19,14 @@ import { documentsRouter } from '../routers/documents';
 import { sessionsRouter } from '../routers/sessions';
 import { chatRouter } from '../routers/chat';
 import { runpodRouter } from '../routers/runpod';
+import { gitRouter } from '../routers/git';
 
 export const appRouter = router({
   documents: documentsRouter,
   sessions: sessionsRouter,
   chat: chatRouter,
   runpod: runpodRouter,
+  git: gitRouter,
 });
 
 export type AppRouter = typeof appRouter;
