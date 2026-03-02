@@ -27,6 +27,7 @@ import { httpBatchLink, loggerLink } from '@trpc/client';
 import { trpc } from '../client/trpc';
 import { queryClient } from './queryClient';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { FallbackCli } from './fallback-cli/FallbackCli';
 import App from './App';
 
 const links = [
@@ -63,7 +64,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     >
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
-          <ErrorBoundary>
+          <ErrorBoundary fallback={<FallbackCli />}>
             <App />
           </ErrorBoundary>
         </QueryClientProvider>
