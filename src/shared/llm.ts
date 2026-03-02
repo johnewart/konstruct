@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { loadConfig, getProviderById } from './config';
 import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
@@ -81,6 +82,15 @@ export async function chat(
   const providerId = options?.providerId ?? 'openai';
   const projectRoot = options?.projectRoot ?? '';
 
+  let provider: { type?: string } | undefined;
+  try {
+    const config = projectRoot ? loadConfig(projectRoot) : { providers: [] as Array<{ id?: string; type?: string }> };
+    provider = providerId ? getProviderById(config, providerId) : undefined;
+  } catch (e) {
+    log.warn('Could not load config for provider lookup', e);
+  }
+  const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
+
   if (providerId === 'anthropic') {
     return anthropic.chat(messages, {
       model: options?.model,
@@ -91,7 +101,7 @@ export async function chat(
       sessionId: options?.sessionId,
     });
   }
-  if (providerId === 'bedrock') {
+  if (isBedrock) {
     return bedrock.chat(messages, {
       model: options?.model,
       tools: options?.tools,

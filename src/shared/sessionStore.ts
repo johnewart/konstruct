@@ -179,20 +179,22 @@ function loadSessionFromDisk(sessionId: string, projectId: string): Session | un
 }
 
 /**
- * Get session by ID. If not in map and projectId is provided, try loading from that project's dir.
+ * Get session by ID. When projectId is provided, always try loading from disk first
+ * so we return the latest state (e.g. after the agent worker has updated the session).
+ * Otherwise in-memory cache can return stale data when the worker runs in a separate process.
  */
 export function getSession(
   id: string,
   projectId?: string
 ): Session | undefined {
-  let entry = sessionById.get(id);
-  if (!entry && projectId) {
-    const session = loadSessionFromDisk(id, projectId);
-    if (session) {
-      if (!Array.isArray(session.todos)) session.todos = [];
-      return session;
+  if (projectId) {
+    const fromDisk = loadSessionFromDisk(id, projectId);
+    if (fromDisk) {
+      if (!Array.isArray(fromDisk.todos)) fromDisk.todos = [];
+      return fromDisk;
     }
   }
+  const entry = sessionById.get(id);
   if (!entry) return undefined;
   const session = entry.session;
   if (session && !Array.isArray(session.todos)) session.todos = [];
