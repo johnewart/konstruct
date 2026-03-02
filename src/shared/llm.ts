@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv } from './providers';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { createLogger } from './logger';
@@ -72,6 +72,7 @@ export async function chat(
       model: options?.model,
       tools: options?.tools,
       projectRoot,
+      providerId,
       signal: options?.signal,
     });
   }
@@ -80,6 +81,7 @@ export async function chat(
       model: options?.model,
       tools: options?.tools,
       projectRoot,
+      providerId,
       signal: options?.signal,
     });
   }
@@ -102,8 +104,10 @@ export async function chat(
     );
   }
   const model = options?.model ?? defaultModel;
+  const maxTokens = getContextWindowForModel(projectRoot, providerId, model);
   const body: Record<string, unknown> = {
     model,
+    ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
     messages: messages.map((m) => {
       const msg: Record<string, unknown> = {
         role: m.role,

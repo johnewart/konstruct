@@ -38,16 +38,29 @@ export type KonstructProject = {
   };
 };
 
-/** Provider definition: type + secret_ref (pointer), no raw API key. */
+/** Per-provider model: name and optional context window (for max_tokens). */
+export type ProviderModel = {
+  id: string;
+  name: string;
+  contextWindow?: number;
+};
+
+/** Provider definition: type + type-specific config (secret_ref, base_url, aws_profile, etc.). */
 export type ConfigProvider = {
   id: string;
   name: string;
   type: string;
-  /** Secret reference: env:VAR_NAME or 1pass:op://Vault/Item/field */
+  /** Secret reference: env:VAR_NAME or 1pass:op://Vault/Item/field (OpenAI, Anthropic, RunPod). */
   secret_ref?: string;
+  /** Optional base URL override (OpenAI-compatible). */
   base_url?: string;
+  /** Optional default model id/name (can be omitted; UI may send model per request). */
   default_model?: string;
   endpoint?: string;
+  /** AWS profile name for Bedrock (uses SDK default chain if unset). */
+  aws_profile?: string;
+  /** Managed list of models (name + context window) for this provider. */
+  models?: ProviderModel[];
   max_tokens?: number;
   temperature?: number;
   [key: string]: unknown;
@@ -173,6 +186,19 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
     providers: Array.isArray(providers)
       ? providers.map((p) => {
           const base = (p && typeof p === 'object' ? { ...p } : {}) as Record<string, unknown>;
+          const rawModels = p?.models as Array<Record<string, unknown>> | undefined;
+          const models: ProviderModel[] | undefined = Array.isArray(rawModels)
+            ? rawModels
+              .filter((m) => m && (m.id ?? m.name))
+              .map((m, i) => ({
+                id: String(m?.id ?? m?.name ?? `model-${i}`),
+                name: String(m?.name ?? m?.id ?? ''),
+                contextWindow:
+                  m?.contextWindow != null || m?.context_window != null
+                    ? Number(m?.contextWindow ?? m?.context_window)
+                    : undefined,
+              }))
+            : undefined;
           return {
             ...base,
             id: String(p?.id ?? ''),
@@ -182,6 +208,8 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
             base_url: p?.base_url != null ? String(p.base_url) : undefined,
             default_model: p?.default_model != null ? String(p.default_model) : undefined,
             endpoint: p?.endpoint != null ? String(p.endpoint) : undefined,
+            aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
+            models: models?.length ? models : undefined,
             max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
             temperature: p?.temperature != null ? Number(p.temperature) : undefined,
           } as ConfigProvider;

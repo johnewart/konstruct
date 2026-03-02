@@ -28,9 +28,9 @@ import {
   type ToolConfiguration,
   type ToolSpecification,
 } from '@aws-sdk/client-bedrock-runtime';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import { fromNodeProviderChain, fromIni } from '@aws-sdk/credential-providers';
 import type { ChatMessage, ToolDefinition } from './llm';
-import { getBedrockEnv } from './providers';
+import { getBedrockEnv, getContextWindowForModel } from './providers';
 import { createLogger } from './logger';
 
 const log = createLogger('bedrock');
@@ -147,6 +147,7 @@ export async function chat(
     model?: string;
     tools?: ToolDefinition[];
     projectRoot?: string;
+    providerId?: string;
     signal?: AbortSignal;
   }
 ): Promise<{
@@ -158,17 +159,23 @@ export async function chat(
   }>;
 }> {
   const projectRoot = options?.projectRoot ?? '';
-  const { region, model: defaultModel } = getBedrockEnv(projectRoot);
+  const providerId = options?.providerId;
+  const { region, model: defaultModel, aws_profile } = getBedrockEnv(projectRoot, providerId);
   const model = options?.model ?? defaultModel;
+  const maxTokens =
+    (providerId && getContextWindowForModel(projectRoot, providerId, model)) ?? 4096;
 
   const { system, bedMessages } = messagesToBedrock(messages);
   if (bedMessages.length === 0) {
     throw new Error('Bedrock: no messages to send');
   }
 
+  const credentials = aws_profile
+    ? fromIni({ profile: aws_profile })
+    : fromNodeProviderChain();
   const client = new BedrockRuntimeClient({
     region,
-    credentials: fromNodeProviderChain(),
+    credentials,
   });
 
   const toolConfig = options?.tools?.length
@@ -182,7 +189,7 @@ export async function chat(
       messages: bedMessages,
       system: system.length > 0 ? system : undefined,
       inferenceConfig: {
-        maxTokens: 4096,
+        maxTokens,
         temperature: 0.7,
         topP: 1,
       },

@@ -20,7 +20,7 @@
  */
 
 import type { ChatMessage, ToolDefinition } from './llm';
-import { getAnthropicEnvAsync } from './providers';
+import { getAnthropicEnvAsync, getContextWindowForModel } from './providers';
 import { createLogger } from './logger';
 
 const log = createLogger('anthropic');
@@ -118,6 +118,7 @@ export async function chat(
     model?: string;
     tools?: ToolDefinition[];
     projectRoot?: string;
+    providerId?: string;
     signal?: AbortSignal;
   }
 ): Promise<{
@@ -128,15 +129,20 @@ export async function chat(
     function: { name: string; arguments: string };
   }>;
 }> {
+  const projectRoot = options?.projectRoot ?? '';
+  const providerId = options?.providerId;
   const { apiKey, model: defaultModel } = await getAnthropicEnvAsync(
-    options?.projectRoot ?? ''
+    projectRoot,
+    providerId
   );
   const model = options?.model ?? defaultModel;
+  const maxTokens =
+    (providerId && getContextWindowForModel(projectRoot, providerId, model)) ?? 4096;
   const { system, messages: anthropicMessages } = convertToAnthropic(messages);
 
   const body: Record<string, unknown> = {
     model,
-    max_tokens: 4096,
+    max_tokens: maxTokens,
     system: system || undefined,
     messages: anthropicMessages,
   };

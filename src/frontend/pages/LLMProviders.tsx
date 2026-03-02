@@ -15,7 +15,6 @@
  */
 
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { trpc } from '../../client/trpc';
 import {
   Paper,
@@ -29,6 +28,8 @@ import {
   ActionIcon,
   Title,
   Select,
+  NumberInput,
+  Divider,
 } from '@mantine/core';
 import { IconPlus, IconPencil, IconTrash } from '@tabler/icons-react';
 
@@ -42,6 +43,8 @@ const PROVIDER_TYPES = [
 
 type Scope = { type: 'global' } | { type: 'project'; projectId: string };
 
+type ProviderModel = { id: string; name: string; contextWindow?: number };
+
 type FormState = {
   scope: Scope;
   name: string;
@@ -50,6 +53,7 @@ type FormState = {
   base_url: string;
   default_model: string;
   endpoint: string;
+  aws_profile: string;
 };
 
 const emptyForm: FormState = {
@@ -60,6 +64,7 @@ const emptyForm: FormState = {
   base_url: '',
   default_model: '',
   endpoint: '',
+  aws_profile: '',
 };
 
 export function LLMProvidersPage() {
@@ -73,10 +78,15 @@ export function LLMProvidersPage() {
     base_url: string;
     default_model: string;
     endpoint: string;
+    aws_profile: string;
+    models: ProviderModel[];
   } | null>(null);
   const [removeScope, setRemoveScope] = useState<Scope | null>(null);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [modelForm, setModelForm] = useState<{ name: string; contextWindow: number | '' }>({ name: '', contextWindow: '' });
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [modelModalOpen, setModelModalOpen] = useState(false);
 
   const { data: providersData, isLoading } = trpc.providerConfig.list.useQuery();
   const { data: projects = [] } = trpc.projects.list.useQuery();
@@ -106,6 +116,31 @@ export function LLMProvidersPage() {
     },
   });
 
+  const addModelMutation = trpc.providerConfig.addModel.useMutation({
+    onSuccess: (newModel) => {
+      utils.providerConfig.list.invalidate();
+      setEditing((e) => (e ? { ...e, models: [...(e.models ?? []), newModel] } : null));
+      setModelForm({ name: '', contextWindow: '' });
+      setModelModalOpen(false);
+    },
+  });
+  const updateModelMutation = trpc.providerConfig.updateModel.useMutation({
+    onSuccess: (updated) => {
+      utils.providerConfig.list.invalidate();
+      setEditing((e) => (e ? { ...e, models: (e.models ?? []).map((m) => (m.id === updated.id ? updated : m)) } : null));
+      setEditingModelId(null);
+      setModelModalOpen(false);
+    },
+  });
+  const removeModelMutation = trpc.providerConfig.removeModel.useMutation({
+    onSuccess: (_, variables) => {
+      utils.providerConfig.list.invalidate();
+      setEditing((e) => (e ? { ...e, models: (e.models ?? []).filter((m) => m.id !== variables.modelId) } : null));
+      setRemoveModelId(null);
+    },
+  });
+  const [removeModelId, setRemoveModelId] = useState<string | null>(null);
+
   const openAdd = (scope: Scope) => {
     setEditing(null);
     setForm({ ...emptyForm, scope });
@@ -114,7 +149,7 @@ export function LLMProvidersPage() {
 
   const openEdit = (
     scope: Scope,
-    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string }
+    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string; aws_profile?: string; models?: ProviderModel[] }
   ) => {
     setEditing({
       scope,
@@ -125,6 +160,8 @@ export function LLMProvidersPage() {
       base_url: p.base_url ?? '',
       default_model: p.default_model ?? '',
       endpoint: p.endpoint ?? '',
+      aws_profile: p.aws_profile ?? '',
+      models: p.models ?? [],
     });
     setFormOpen(true);
   };
@@ -141,6 +178,7 @@ export function LLMProvidersPage() {
           base_url: editing.base_url.trim() || undefined,
           default_model: editing.default_model.trim() || undefined,
           endpoint: editing.endpoint.trim() || undefined,
+          aws_profile: editing.aws_profile.trim() || undefined,
         },
       });
     } else {
@@ -153,9 +191,39 @@ export function LLMProvidersPage() {
           base_url: form.base_url.trim() || undefined,
           default_model: form.default_model.trim() || undefined,
           endpoint: form.endpoint.trim() || undefined,
+          aws_profile: form.aws_profile.trim() || undefined,
         },
       });
     }
+  };
+
+  const saveModel = () => {
+    if (!editing) return;
+    if (editingModelId) {
+      updateModelMutation.mutate({
+        scope: editing.scope,
+        providerId: editing.id,
+        modelId: editingModelId,
+        model: { name: modelForm.name.trim(), contextWindow: modelForm.contextWindow === '' ? undefined : modelForm.contextWindow },
+      });
+    } else {
+      addModelMutation.mutate({
+        scope: editing.scope,
+        providerId: editing.id,
+        model: { name: modelForm.name.trim(), contextWindow: modelForm.contextWindow === '' ? undefined : modelForm.contextWindow },
+      });
+    }
+  };
+
+  const openAddModel = () => {
+    setEditingModelId(null);
+    setModelForm({ name: '', contextWindow: '' });
+    setModelModalOpen(true);
+  };
+  const openEditModel = (m: ProviderModel) => {
+    setEditingModelId(m.id);
+    setModelForm({ name: m.name, contextWindow: m.contextWindow ?? '' });
+    setModelModalOpen(true);
   };
 
   const handleRemove = () => {
@@ -200,9 +268,10 @@ export function LLMProvidersPage() {
                   <Table.Tr>
                     <Table.Th>Name</Table.Th>
                     <Table.Th>Type</Table.Th>
-                    <Table.Th>Secret ref</Table.Th>
+                    <Table.Th>Credentials / Profile</Table.Th>
                     <Table.Th>Base URL / Endpoint</Table.Th>
                     <Table.Th>Default model</Table.Th>
+                    <Table.Th>Models</Table.Th>
                     <Table.Th w={80} />
                   </Table.Tr>
                 </Table.Thead>
@@ -211,12 +280,13 @@ export function LLMProvidersPage() {
                     <Table.Tr key={p.id}>
                       <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{p.secret_ref ?? '—'}</Text></Table.Td>
+                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
+                      <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
                       <Table.Td>
                         <Group gap="xs">
-                          <ActionIcon variant="subtle" size="sm" onClick={() => openEdit({ type: 'global' }, p)} aria-label="Edit">
+                          <ActionIcon variant="subtle" size="sm" onClick={() => openEdit({ type: 'global' }, p as Parameters<typeof openEdit>[1])} aria-label="Edit">
                             <IconPencil size={14} />
                           </ActionIcon>
                           <ActionIcon variant="subtle" size="sm" color="red" onClick={() => { setRemoveScope({ type: 'global' }); setRemoveId(p.id); }} aria-label="Remove">
@@ -255,9 +325,10 @@ export function LLMProvidersPage() {
                     <Table.Tr>
                       <Table.Th>Name</Table.Th>
                       <Table.Th>Type</Table.Th>
-                      <Table.Th>Secret ref</Table.Th>
+                      <Table.Th>Credentials / Profile</Table.Th>
                       <Table.Th>Base URL / Endpoint</Table.Th>
                       <Table.Th>Default model</Table.Th>
+                      <Table.Th>Models</Table.Th>
                       <Table.Th w={80} />
                     </Table.Tr>
                   </Table.Thead>
@@ -266,12 +337,13 @@ export function LLMProvidersPage() {
                       <Table.Tr key={p.id}>
                         <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{p.secret_ref ?? '—'}</Text></Table.Td>
+                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
+                        <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
                         <Table.Td>
                           <Group gap="xs">
-                            <ActionIcon variant="subtle" size="sm" onClick={() => openEdit({ type: 'project', projectId }, p)} aria-label="Edit">
+                            <ActionIcon variant="subtle" size="sm" onClick={() => openEdit({ type: 'project', projectId }, p as Parameters<typeof openEdit>[1])} aria-label="Edit">
                               <IconPencil size={14} />
                             </ActionIcon>
                             <ActionIcon variant="subtle" size="sm" color="red" onClick={() => { setRemoveScope({ type: 'project', projectId }); setRemoveId(p.id); }} aria-label="Remove">
@@ -328,30 +400,86 @@ export function LLMProvidersPage() {
             value={editing ? editing.type : form.type}
             onChange={(v) => (v ? (editing ? setEditing((x) => x && { ...x, type: v }) : setForm((f) => ({ ...f, type: v }))) : null)}
           />
+          {((editing?.type ?? form.type) === 'bedrock' && (
+            <TextInput
+              label="AWS profile"
+              placeholder="default"
+              value={editing ? editing.aws_profile : form.aws_profile}
+              onChange={(e) => (editing ? setEditing((x) => x && { ...x, aws_profile: e.target.value }) : setForm((f) => ({ ...f, aws_profile: e.target.value })))}
+            />
+          ))}
+          {(['openai', 'anthropic', 'runpod'].includes(editing?.type ?? form.type) && (
+            <TextInput
+              label="Secret ref (env:VAR or 1pass:op://...)"
+              placeholder={editing?.type === 'anthropic' || form.type === 'anthropic' ? 'env:ANTHROPIC_API_KEY' : 'env:OPENAI_API_KEY'}
+              value={editing ? editing.secret_ref : form.secret_ref}
+              onChange={(e) => (editing ? setEditing((x) => x && { ...x, secret_ref: e.target.value }) : setForm((f) => ({ ...f, secret_ref: e.target.value })))}
+            />
+          ))}
+          {(['openai', 'runpod', 'ollama'].includes(editing?.type ?? form.type) && (
+            <TextInput
+              label="Base URL"
+              placeholder="https://api.openai.com/v1"
+              value={editing ? editing.base_url : form.base_url}
+              onChange={(e) => (editing ? setEditing((x) => x && { ...x, base_url: e.target.value }) : setForm((f) => ({ ...f, base_url: e.target.value })))}
+            />
+          ))}
+          {(editing?.type ?? form.type) === 'runpod' && (
+            <TextInput
+              label="Endpoint (e.g. RunPod GraphQL URL)"
+              placeholder="https://api.runpod.io/graphql"
+              value={editing ? editing.endpoint : form.endpoint}
+              onChange={(e) => (editing ? setEditing((x) => x && { ...x, endpoint: e.target.value }) : setForm((f) => ({ ...f, endpoint: e.target.value })))}
+            />
+          )}
           <TextInput
-            label="Secret ref (env:VAR or 1pass:op://...)"
-            placeholder="env:OPENAI_API_KEY"
-            value={editing ? editing.secret_ref : form.secret_ref}
-            onChange={(e) => (editing ? setEditing((x) => x && { ...x, secret_ref: e.target.value }) : setForm((f) => ({ ...f, secret_ref: e.target.value })))}
-          />
-          <TextInput
-            label="Base URL"
-            placeholder="https://api.openai.com/v1"
-            value={editing ? editing.base_url : form.base_url}
-            onChange={(e) => (editing ? setEditing((x) => x && { ...x, base_url: e.target.value }) : setForm((f) => ({ ...f, base_url: e.target.value })))}
-          />
-          <TextInput
-            label="Default model"
-            placeholder="gpt-4o-mini"
+            label="Default model (optional)"
+            placeholder="e.g. gpt-4o-mini"
             value={editing ? editing.default_model : form.default_model}
             onChange={(e) => (editing ? setEditing((x) => x && { ...x, default_model: e.target.value }) : setForm((f) => ({ ...f, default_model: e.target.value })))}
           />
-          <TextInput
-            label="Endpoint (e.g. RunPod GraphQL URL)"
-            placeholder="https://api.runpod.io/graphql"
-            value={editing ? editing.endpoint : form.endpoint}
-            onChange={(e) => (editing ? setEditing((x) => x && { ...x, endpoint: e.target.value }) : setForm((f) => ({ ...f, endpoint: e.target.value })))}
-          />
+          {editing && (
+            <>
+              <Divider label="Models" labelPosition="left" />
+              <Group justify="space-between">
+                <Text size="sm" c="dimmed">Model name and context window (for max_tokens)</Text>
+                <Button variant="light" size="xs" leftSection={<IconPlus size={14} />} onClick={openAddModel}>
+                  Add model
+                </Button>
+              </Group>
+              {editing.models.length === 0 ? (
+                <Text size="sm" c="dimmed">No models. Add one to set context window per model.</Text>
+              ) : (
+                <Table withTableBorder withColumnBorders>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Name</Table.Th>
+                      <Table.Th>Context window</Table.Th>
+                      <Table.Th w={80} />
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {editing.models.map((m) => (
+                      <Table.Tr key={m.id}>
+                        <Table.Td><Text size="sm">{m.name}</Text></Table.Td>
+                        <Table.Td><Text size="sm">{m.contextWindow ?? '—'}</Text></Table.Td>
+                        <Table.Td>
+                          <Group gap="xs">
+                            <ActionIcon variant="subtle" size="sm" onClick={() => openEditModel(m)} aria-label="Edit model">
+                              <IconPencil size={14} />
+                            </ActionIcon>
+                            <ActionIcon variant="subtle" size="sm" color="red" onClick={() => setRemoveModelId(m.id)} aria-label="Remove model">
+                              <IconTrash size={14} />
+                            </ActionIcon>
+                          </Group>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              )}
+            </>
+          )}
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button
@@ -364,6 +492,54 @@ export function LLMProvidersPage() {
           </Group>
         </Stack>
       </Modal>
+
+      <Modal opened={modelModalOpen} onClose={() => { setModelModalOpen(false); setEditingModelId(null); }} title={editingModelId ? 'Edit model' : 'Add model'}>
+        <Stack gap="md">
+          <TextInput
+            label="Model name"
+            placeholder="gpt-4o-mini"
+            value={modelForm.name}
+            onChange={(e) => setModelForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <NumberInput
+            label="Context window (max_tokens)"
+            placeholder="4096"
+            min={1}
+            value={modelForm.contextWindow === '' ? undefined : modelForm.contextWindow}
+            onChange={(v) => setModelForm((f) => ({ ...f, contextWindow: v === '' ? '' : Number(v) }))}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => { setModelModalOpen(false); setEditingModelId(null); }}>Cancel</Button>
+            <Button
+              onClick={saveModel}
+              loading={addModelMutation.isPending || updateModelMutation.isPending}
+              disabled={!modelForm.name.trim()}
+            >
+              {editingModelId ? 'Save' : 'Add'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      {removeModelId !== null && editing && (
+        <Modal opened onClose={() => setRemoveModelId(null)} title="Remove model">
+          <Stack gap="md">
+            <Text size="sm">Remove this model from the list? This does not affect the provider.</Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setRemoveModelId(null)}>Cancel</Button>
+              <Button
+                color="red"
+                onClick={() => {
+                  removeModelMutation.mutate({ scope: editing.scope, providerId: editing.id, modelId: removeModelId });
+                }}
+                loading={removeModelMutation.isPending}
+              >
+                Remove
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      )}
 
       <Modal opened={removeId !== null} onClose={() => { setRemoveId(null); setRemoveScope(null); }} title="Remove provider">
         <Stack gap="md">

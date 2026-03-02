@@ -20,6 +20,7 @@
  */
 
 import { loadConfig, getProviderById, resolveProviderSecret, saveConfig } from './config';
+import type { ProviderModel } from './config';
 import { getDefaultPodId } from './runpodProject';
 
 export type ProviderOption = {
@@ -91,23 +92,31 @@ export function getAnthropicEnv(projectRoot: string): {
   return { apiKey, model };
 }
 
-/** Bedrock: region and model from env (AWS_REGION, AWS_BEDROCK_MODEL) or config.llm. */
-export function getBedrockEnv(projectRoot: string): {
-  region: string;
-  model: string;
-} {
+/** Bedrock: region, model, and optional aws_profile from provider or env. */
+export function getBedrockEnv(
+  projectRoot: string,
+  providerId?: string
+): { region: string; model: string; aws_profile?: string } {
   const c = loadConfig(projectRoot);
+  const provider = providerId ? getProviderById(c, providerId) : undefined;
   const region =
     getEnv('AWS_REGION') || getEnv('AWS_DEFAULT_REGION') || 'us-east-1';
   const model =
+    provider?.default_model ||
     getEnv('AWS_BEDROCK_MODEL') ||
     (c.llm.model ?? '') ||
     'anthropic.claude-3-5-sonnet-v2:0';
-  return { region, model };
+  const aws_profile = provider?.aws_profile?.trim();
+  return { region, model, ...(aws_profile ? { aws_profile } : {}) };
 }
 
-/** Bedrock: considered configured if AWS credentials/region are available (SDK default chain). */
-export function isBedrockConfigured(projectRoot: string): boolean {
+/** Bedrock: configured if AWS credentials/region available or provider has aws_profile. */
+export function isBedrockConfigured(projectRoot: string, providerId?: string): boolean {
+  if (providerId) {
+    const c = loadConfig(projectRoot);
+    const p = getProviderById(c, providerId);
+    if (p?.aws_profile?.trim()) return true;
+  }
   return (
     getEnv('AWS_REGION').length > 0 || getEnv('AWS_ACCESS_KEY_ID').length > 0
   );
@@ -210,15 +219,18 @@ export async function getRunpodEnvAsync(
   return sync;
 }
 
-/** Returns all provider options for the UI plus default provider from config. */
+export type ProviderListItem = {
+  id: string;
+  name: string;
+  defaultModel?: string;
+  models: ProviderModel[];
+  configured: boolean;
+  url?: string;
+};
+
+/** Returns all provider options for the UI (built-in + custom) plus default provider from config. */
 export function getAllProviders(projectRoot: string): {
-  providers: Array<{
-    id: string;
-    name: string;
-    defaultModel: string;
-    configured: boolean;
-    url?: string;
-  }>;
+  providers: ProviderListItem[];
   defaultProviderId: string;
 } {
   const c = loadConfig(projectRoot);
@@ -226,17 +238,13 @@ export function getAllProviders(projectRoot: string): {
   const anthropicEnv = getAnthropicEnv(projectRoot);
   const runpodEnv = getRunpodEnv(projectRoot);
   const ollamaEnv = getOllamaEnv(projectRoot);
-  const providers: Array<{
-    id: string;
-    name: string;
-    defaultModel: string;
-    configured: boolean;
-    url?: string;
-  }> = [
+  const bedrockEnv = getBedrockEnv(projectRoot);
+  const builtIn: ProviderListItem[] = [
     {
       id: 'openai',
       name: 'OpenAI / Vast',
       defaultModel: openaiEnv.model,
+      models: [],
       configured: !!openaiEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'openai', 'openai'),
       url: openaiEnv.baseUrl || undefined,
     },
@@ -244,6 +252,7 @@ export function getAllProviders(projectRoot: string): {
       id: 'ollama',
       name: 'Ollama (local)',
       defaultModel: ollamaEnv.model,
+      models: [],
       configured: !!ollamaEnv.baseUrl,
       url: ollamaEnv.baseUrl || undefined,
     },
@@ -251,6 +260,7 @@ export function getAllProviders(projectRoot: string): {
       id: 'runpod',
       name: 'RunPod',
       defaultModel: runpodEnv.model || 'default',
+      models: [],
       configured: !!runpodEnv.baseUrl || isProviderConfiguredWithSecret(projectRoot, 'runpod', 'runpod'),
       url: runpodEnv.baseUrl || undefined,
     },
@@ -258,17 +268,48 @@ export function getAllProviders(projectRoot: string): {
       id: 'anthropic',
       name: 'Anthropic',
       defaultModel: anthropicEnv.model,
+      models: [],
       configured: !!anthropicEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'anthropic', 'anthropic'),
     },
     {
       id: 'bedrock',
       name: 'AWS Bedrock',
-      defaultModel:
-        getEnv('AWS_BEDROCK_MODEL') ||
-        'anthropic.claude-3-5-sonnet-20241022-v2',
+      defaultModel: bedrockEnv.model,
+      models: [],
       configured: isBedrockConfigured(projectRoot),
     },
   ];
+  const customProviders: ProviderListItem[] = (c.providers ?? []).map((p) => {
+    const type = (p.type ?? '').toLowerCase();
+    let configured = false;
+    let url: string | undefined;
+    if (type === 'openai') {
+      configured = !!p.secret_ref?.trim();
+      url = p.base_url ?? undefined;
+    } else if (type === 'anthropic') {
+      configured = !!p.secret_ref?.trim();
+    } else if (type === 'bedrock') {
+      configured = !!p.aws_profile?.trim() || isBedrockConfigured(projectRoot, p.id);
+    } else if (type === 'runpod') {
+      configured = !!p.secret_ref?.trim() || !!runpodEnv.baseUrl;
+      url = runpodEnv.baseUrl || undefined;
+    } else if (type === 'ollama') {
+      configured = !!ollamaEnv.baseUrl;
+      url = ollamaEnv.baseUrl || undefined;
+    } else {
+      configured = !!p.secret_ref?.trim();
+      url = p.base_url ?? undefined;
+    }
+    return {
+      id: p.id,
+      name: p.name,
+      defaultModel: p.default_model ?? undefined,
+      models: p.models ?? [],
+      configured,
+      url,
+    };
+  });
+  const providers = [...builtIn, ...customProviders];
   const rawProvider = (c.llm.provider ?? '').trim();
   const isKnown =
     rawProvider &&
@@ -278,13 +319,31 @@ export function getAllProviders(projectRoot: string): {
   return { providers, defaultProviderId };
 }
 
+/**
+ * Resolve context window (max_tokens) for a model from the provider's models list.
+ * Returns undefined if provider has no models list or model not found.
+ */
+export function getContextWindowForModel(
+  projectRoot: string,
+  providerId: string,
+  model: string
+): number | undefined {
+  const c = loadConfig(projectRoot);
+  const provider = getProviderById(c, providerId);
+  const models = provider?.models;
+  if (!models?.length || !model) return undefined;
+  const m = models.find((x) => x.name === model || x.id === model);
+  return m?.contextWindow;
+}
+
 /** Update the default provider in the config file (project or global). */
 export function setDefaultProvider(providerId: string, projectRoot: string): void {
-  const validProviders = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
-  if (!validProviders.includes(providerId)) {
-    throw new Error(`Invalid provider: ${providerId}. Must be one of: ${validProviders.join(', ')}`);
-  }
   const config = loadConfig(projectRoot);
+  const builtIn = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
+  const isCustom = config.providers?.some((p) => p.id === providerId);
+  if (!builtIn.includes(providerId) && !isCustom) {
+    throw new Error(`Invalid provider: ${providerId}. Must be a built-in type or an existing custom provider id.`);
+  }
   config.llm = config.llm ?? {};
   config.llm.provider = providerId;
   saveConfig(config, projectRoot);
