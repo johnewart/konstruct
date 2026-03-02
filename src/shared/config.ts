@@ -97,6 +97,27 @@ export function getGlobalConfigPath(): string {
   return path.join(home, '.config', 'konstruct', 'config.yml');
 }
 
+/** Global config directory: ~/.config/konstruct (e.g. for projects/<id>/sessions.json). */
+export function getGlobalConfigDir(): string {
+  return path.dirname(getGlobalConfigPath());
+}
+
+/**
+ * Resolve project id for a given project root. Returns the known project id if the root
+ * matches a project's local path, otherwise null (caller may use '_default').
+ */
+export function getProjectIdForRoot(projectRoot: string): string | null {
+  if (!projectRoot?.trim()) return null;
+  const config = loadGlobalConfig();
+  const resolvedRoot = path.resolve(projectRoot);
+  const project = config.projects?.find(
+    (p) =>
+      p.location.type === 'local' &&
+      path.resolve(p.location.path) === resolvedRoot
+  );
+  return project?.id ?? null;
+}
+
 /** Project config path: <projectRoot>/.konstruct/config.yml */
 export function getProjectConfigPath(projectRoot: string): string {
   if (!projectRoot) return '';

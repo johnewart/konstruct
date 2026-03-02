@@ -15,24 +15,50 @@
  */
 
 /**
- * Per-project RunPod default pod storage (.konstruct/runpod.json).
+ * RunPod default pod storage: central ~/.config/konstruct/runpod.json
+ * (no longer per-repo so .konstruct stays committable).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import { getGlobalConfigDir } from './config';
 
 const FILENAME = 'runpod.json';
 
-function getFilePath(projectRoot: string): string {
+function getCentralPath(): string {
+  return path.join(getGlobalConfigDir(), FILENAME);
+}
+
+function getLegacyPath(projectRoot: string): string {
   if (!projectRoot) return '';
   return path.join(projectRoot, '.konstruct', FILENAME);
 }
 
 export function getDefaultPodId(projectRoot: string): string | null {
-  const filePath = getFilePath(projectRoot);
-  if (!filePath || !existsSync(filePath)) return null;
+  const centralPath = getCentralPath();
+  let content: string | null = null;
+  if (existsSync(centralPath)) {
+    try {
+      content = readFileSync(centralPath, 'utf-8');
+    } catch {
+      content = null;
+    }
+  }
+  // Migration: if central missing but legacy exists, copy to central
+  if (!content && projectRoot) {
+    const legacyPath = getLegacyPath(projectRoot);
+    if (existsSync(legacyPath)) {
+      try {
+        content = readFileSync(legacyPath, 'utf-8');
+        mkdirSync(getGlobalConfigDir(), { recursive: true });
+        writeFileSync(centralPath, content, 'utf-8');
+      } catch {
+        content = null;
+      }
+    }
+  }
+  if (!content) return null;
   try {
-    const content = readFileSync(filePath, 'utf-8');
     const data = JSON.parse(content) as { defaultPodId?: string };
     const id = data.defaultPodId;
     return typeof id === 'string' && id.trim() ? id.trim() : null;
@@ -42,13 +68,12 @@ export function getDefaultPodId(projectRoot: string): string | null {
 }
 
 export function setDefaultPodId(
-  projectRoot: string,
+  _projectRoot: string,
   podId: string | null
 ): void {
-  const dir = projectRoot ? path.join(projectRoot, '.konstruct') : '';
-  if (!dir) return;
+  const dir = getGlobalConfigDir();
   mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, FILENAME);
+  const filePath = getCentralPath();
   if (podId == null || (typeof podId === 'string' && podId.trim() === '')) {
     writeFileSync(filePath, JSON.stringify({}, null, 2), 'utf-8');
     return;

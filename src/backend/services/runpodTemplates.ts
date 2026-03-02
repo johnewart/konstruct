@@ -15,13 +15,14 @@
  */
 
 /**
- * RunPod pod templates saved to .konstruct/runpod-templates.json.
+ * RunPod pod templates: central ~/.config/konstruct/runpod-templates.json
  * Templates are configs that can be launched/stopped separately.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { getGlobalConfigDir } from '../../shared/config';
 
 export type RunpodTemplate = {
   id: string;
@@ -35,16 +36,40 @@ export type RunpodTemplate = {
 
 const FILENAME = 'runpod-templates.json';
 
-function getFilePath(projectRoot: string): string {
+function getCentralPath(): string {
+  return path.join(getGlobalConfigDir(), FILENAME);
+}
+
+function getLegacyPath(projectRoot: string): string {
   if (!projectRoot) return '';
   return path.join(projectRoot, '.konstruct', FILENAME);
 }
 
-function loadRaw(projectRoot: string): RunpodTemplate[] {
-  const filePath = getFilePath(projectRoot);
-  if (!filePath || !existsSync(filePath)) return [];
+function loadRaw(projectRoot?: string): RunpodTemplate[] {
+  const centralPath = getCentralPath();
+  let content: string | null = null;
+  if (existsSync(centralPath)) {
+    try {
+      content = readFileSync(centralPath, 'utf-8');
+    } catch {
+      content = null;
+    }
+  }
+  // Migration: if central missing but legacy exists, copy to central
+  if (!content && projectRoot) {
+    const legacyPath = getLegacyPath(projectRoot);
+    if (existsSync(legacyPath)) {
+      try {
+        content = readFileSync(legacyPath, 'utf-8');
+        mkdirSync(getGlobalConfigDir(), { recursive: true });
+        writeFileSync(centralPath, content, 'utf-8');
+      } catch {
+        content = null;
+      }
+    }
+  }
+  if (!content) return [];
   try {
-    const content = readFileSync(filePath, 'utf-8');
     const data = JSON.parse(content);
     return Array.isArray(data) ? data : [];
   } catch {
@@ -64,10 +89,9 @@ export function saveRunpodTemplate(
     estimatedCostPerHour?: number;
   }
 ): RunpodTemplate {
-  const dir = projectRoot ? path.join(projectRoot, '.konstruct') : '';
-  if (!dir) throw new Error('Project root required');
+  const dir = getGlobalConfigDir();
   mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, FILENAME);
+  const filePath = getCentralPath();
   const list = loadRaw(projectRoot);
   const template: RunpodTemplate = {
     id: randomUUID(),
@@ -85,8 +109,7 @@ export function deleteRunpodTemplate(
   projectRoot: string,
   templateId: string
 ): void {
-  const filePath = getFilePath(projectRoot);
-  if (!filePath) return;
+  const filePath = getCentralPath();
   const list = loadRaw(projectRoot).filter((t) => t.id !== templateId);
   writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
 }
@@ -96,8 +119,8 @@ export function setTemplateLaunchedPodId(
   templateId: string,
   podId: string | null
 ): void {
-  const filePath = getFilePath(projectRoot);
-  if (!filePath || !existsSync(filePath)) return;
+  const filePath = getCentralPath();
+  if (!existsSync(filePath)) return;
   const list = loadRaw(projectRoot);
   const t = list.find((x) => x.id === templateId);
   if (t) {

@@ -15,11 +15,12 @@
  */
 
 /**
- * Per-model RunPod/vLLM settings stored in .konstruct/runpod-models.json
+ * Per-model RunPod/vLLM settings: central ~/.config/konstruct/runpod-models.json
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
+import { getGlobalConfigDir } from '../../shared/config';
 
 export type RunpodModelSettings = {
   maxModelLen?: number;
@@ -41,16 +42,40 @@ export type RunpodModelSettings = {
 
 const FILENAME = 'runpod-models.json';
 
-function getFilePath(projectRoot: string): string {
+function getCentralPath(): string {
+  return path.join(getGlobalConfigDir(), FILENAME);
+}
+
+function getLegacyPath(projectRoot: string): string {
   if (!projectRoot) return '';
   return path.join(projectRoot, '.konstruct', FILENAME);
 }
 
-function loadRaw(projectRoot: string): Record<string, RunpodModelSettings> {
-  const filePath = getFilePath(projectRoot);
-  if (!filePath || !existsSync(filePath)) return {};
+function loadRaw(projectRoot?: string): Record<string, RunpodModelSettings> {
+  const centralPath = getCentralPath();
+  let content: string | null = null;
+  if (existsSync(centralPath)) {
+    try {
+      content = readFileSync(centralPath, 'utf-8');
+    } catch {
+      content = null;
+    }
+  }
+  // Migration: if central missing but legacy exists, copy to central
+  if (!content && projectRoot) {
+    const legacyPath = getLegacyPath(projectRoot);
+    if (existsSync(legacyPath)) {
+      try {
+        content = readFileSync(legacyPath, 'utf-8');
+        mkdirSync(getGlobalConfigDir(), { recursive: true });
+        writeFileSync(centralPath, content, 'utf-8');
+      } catch {
+        content = null;
+      }
+    }
+  }
+  if (!content) return {};
   try {
-    const content = readFileSync(filePath, 'utf-8');
     const data = JSON.parse(content);
     return typeof data === 'object' && data !== null ? data : {};
   } catch {
@@ -69,10 +94,10 @@ export function setRunpodModelSettings(
   modelId: string,
   settings: Partial<RunpodModelSettings>
 ): void {
-  const dir = projectRoot ? path.join(projectRoot, '.konstruct') : '';
-  if (!dir || !modelId?.trim()) return;
+  if (!modelId?.trim()) return;
+  const dir = getGlobalConfigDir();
   mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, FILENAME);
+  const filePath = getCentralPath();
   const all = loadRaw(projectRoot);
   const key = modelId.trim();
   const current = all[key] ?? {};

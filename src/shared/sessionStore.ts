@@ -16,6 +16,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { getGlobalConfigDir, getProjectIdForRoot } from './config';
 import { createLogger } from './logger';
 
 const log = createLogger('sessionStore');
@@ -46,23 +47,54 @@ export interface Session {
   todos: TodoItem[];
 }
 
-/** Project root for persistence path (same as executor). */
+/**
+ * Project root for the current run. Used to resolve which project's session
+ * dir to use under ~/.config/konstruct/projects/<project-id>/.
+ */
 let projectRootForRun: string | null = null;
+let lastLoadedProjectId: string | null = null;
 
 /**
  * Set the project root for the current run (e.g. active project path).
- * Call at the start of runAgentLoop and clear in finally.
+ * Call at the start of each request/run so sessions load/save under that project's dir.
+ * Loads that project's sessions from disk when switching to a different project.
  */
 export function setProjectRootForRun(root: string | null): void {
   projectRootForRun = root;
+  const id = getCurrentProjectId();
+  if (id !== lastLoadedProjectId) {
+    lastLoadedProjectId = id;
+    loadSessions();
+  }
 }
 
-function getProjectRoot(): string {
-  return projectRootForRun ?? process.env.PROJECT_ROOT ?? process.cwd();
+/** Project id used for session storage (known project id or '_default'). */
+function getCurrentProjectId(): string {
+  const id = getProjectIdForRoot(projectRootForRun ?? '');
+  return id ?? '_default';
 }
 
+/** Sessions path: ~/.config/konstruct/projects/<project-id>/sessions.json */
 function getSessionsPath(): string {
-  return path.join(getProjectRoot(), '.konstruct', 'sessions.json');
+  return path.join(
+    getGlobalConfigDir(),
+    'projects',
+    getCurrentProjectId(),
+    'sessions.json'
+  );
+}
+
+/** Per-project in-memory session cache. */
+const sessionsByProjectId = new Map<string, Map<string, Session>>();
+
+function getCurrentSessionsMap(): Map<string, Session> {
+  const id = getCurrentProjectId();
+  let map = sessionsByProjectId.get(id);
+  if (!map) {
+    map = new Map();
+    sessionsByProjectId.set(id, map);
+  }
+  return map;
 }
 
 /** Session shape for JSON (dates as ISO strings). */
@@ -87,26 +119,25 @@ function deserialize(raw: SessionSerialized): Session {
   };
 }
 
-const sessions = new Map<string, Session>();
-
 function loadSessions(): void {
   const filePath = getSessionsPath();
+  const map = getCurrentSessionsMap();
   try {
     if (!fs.existsSync(filePath)) return;
     const data = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(data) as SessionSerialized[];
     if (!Array.isArray(parsed)) return;
-    sessions.clear();
+    map.clear();
     for (const raw of parsed) {
       if (raw?.id) {
         try {
-          sessions.set(raw.id, deserialize(raw));
+          map.set(raw.id, deserialize(raw));
         } catch {
           // skip malformed entry
         }
       }
     }
-    log.debug('loadSessions', sessions.size, 'sessions');
+    log.debug('loadSessions', getCurrentProjectId(), map.size, 'sessions');
   } catch (err) {
     log.warn('loadSessions failed', err);
   }
@@ -114,10 +145,11 @@ function loadSessions(): void {
 
 function saveSessions(): void {
   const filePath = getSessionsPath();
+  const map = getCurrentSessionsMap();
   try {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
-    const array = Array.from(sessions.values()).map(serialize);
+    const array = Array.from(map.values()).map(serialize);
     fs.writeFileSync(filePath, JSON.stringify(array, null, 2), 'utf-8');
   } catch (err) {
     log.warn('saveSessions failed', err);
@@ -155,20 +187,20 @@ export function createSession(title: string): Session {
     messages: [],
     todos: [],
   };
-  sessions.set(id, session);
+  getCurrentSessionsMap().set(id, session);
   log.info('createSession', id, session.title);
   saveSessions();
   return session;
 }
 
 export function getSession(id: string): Session | undefined {
-  const session = sessions.get(id);
+  const session = getCurrentSessionsMap().get(id);
   if (session && !Array.isArray(session.todos)) session.todos = [];
   return session;
 }
 
 export function listSessions(): Session[] {
-  return Array.from(sessions.values()).sort(
+  return Array.from(getCurrentSessionsMap().values()).sort(
     (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
   );
 }
@@ -177,7 +209,7 @@ export function updateSessionMessages(
   id: string,
   messages: ChatMessage[]
 ): Session | undefined {
-  const session = sessions.get(id);
+  const session = getCurrentSessionsMap().get(id);
   if (!session) return undefined;
   session.messages = messages;
   session.updatedAt = new Date();
@@ -190,7 +222,7 @@ export function updateSessionTitle(
   id: string,
   title: string
 ): Session | undefined {
-  const session = sessions.get(id);
+  const session = getCurrentSessionsMap().get(id);
   if (!session) return undefined;
   session.title = title.trim() || 'Chat';
   session.updatedAt = new Date();
@@ -199,13 +231,13 @@ export function updateSessionTitle(
 }
 
 export function deleteSession(id: string): boolean {
-  const ok = sessions.delete(id);
+  const ok = getCurrentSessionsMap().delete(id);
   if (ok) saveSessions();
   return ok;
 }
 
 export function listTodos(sessionId: string): TodoItem[] {
-  const session = sessions.get(sessionId);
+  const session = getCurrentSessionsMap().get(sessionId);
   if (!session?.todos) return [];
   return session.todos;
 }
@@ -214,7 +246,7 @@ export function addTodo(
   sessionId: string,
   description: string
 ): TodoItem | undefined {
-  const session = sessions.get(sessionId);
+  const session = getCurrentSessionsMap().get(sessionId);
   if (!session) return undefined;
   if (!session.todos) session.todos = [];
   const item: TodoItem = {
@@ -233,7 +265,7 @@ export function updateTodo(
   todoId: string,
   status: TodoItem['status']
 ): boolean {
-  const session = sessions.get(sessionId);
+  const session = getCurrentSessionsMap().get(sessionId);
   if (!session?.todos) return false;
   const t = session.todos.find((x) => x.id === todoId);
   if (!t) return false;
@@ -244,7 +276,7 @@ export function updateTodo(
 }
 
 export function removeTodo(sessionId: string, todoId: string): boolean {
-  const session = sessions.get(sessionId);
+  const session = getCurrentSessionsMap().get(sessionId);
   if (!session?.todos) return false;
   const i = session.todos.findIndex((x) => x.id === todoId);
   if (i < 0) return false;
