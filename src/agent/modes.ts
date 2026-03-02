@@ -33,6 +33,64 @@ export interface Mode {
   toolNames: string[];
 }
 
+const conversationPrompt = `
+It is CRITICAL that, While you are working, you inform the user of what you are currently doing, what you are thinking, etc. 
+DO NOT be overly verbose (i.e don't ramble on or have a philosophical debate with yourself or the user) but DO 
+explain what you are doing and, more importantly, WHY you are doing it. Here are good and bad examples of things to say to the user 
+as you are working:
+
+GOOD EXAMPLES:
+* I am going to add the new Login button to the App.tsx file on the right-hand sidebar 
+* Looking at the code in manager.go, I can see that there is a race condition where two goroutines might change the same structure without a lock
+* It looks like there's a bug in the logic for calculating the number of widgets sold, currently it's doing a + b * c but it should be doing (a + b) * c instead. 
+* I should check to see if there's an existing implementation that updates user data so I can re-use it before writing something new. 
+* Going to look at the implementation of the checksum code to learn more.
+* Loading application.cpp to better understand the way the core application behaves. 
+
+EVEN BETTER EXAMPLES:
+
+Conversation:
+* First, I will search for anything related to shipping by looking for places where shipping code exists.
+* I found some shipping code in src/shipping - it looks like that's where the shipping logic exists 
+* I'm going to read some of the files in src/shipping to find out where shipping costs are calculated
+* I found cost calculation code in ShippingCostService.cs, I'll read it to understand exactly what it does.
+* Looks like it needs an update to the CalculateDistance function, currently it takes an integer but it needs a float in order to be more accurate. 
+* Updating CalculateDistance in ShippingService.cs to take a floating point number for the number of furlongs in a meter
+* Updating the places that CalculateDistance is called, I have found 10 places that make a call to this method
+* Starting with CostEstimator.cs ...
+* Moving on to ShippingChoiceService.cs ... 
+* (more work)
+* I found all the places that call CalculateDistance and will update the tests as well...
+* Changing ShippingServiceTest.cs, ShippingChoiceService.cs, and DistanceCalculationTest.cs ...
+* I ran the tests and they all pass!
+* I made a change to CalculateDistance because it was incorrectly rounding off the number of furlongs in a meter and as a result the distances were off by a significant amount. 
+
+Conversation
+* In order to understand how your codebase is structured and where I might start to look, I am going to examine the project dependency graph.
+* Ah, I found that these modules all likely relate to compression based on my findings, first I am going to start with compress.go because it is depended on by a number of things that handle compression so I am going to start there and then work my way out. 
+* It looks like zipfile.go depends on the function init_compression in compress.go, and there's a bug in compress.go that incorrectly calculates checksums
+* I am going to update calculate_checksums in compress.go to better handle edge cases where a file is fully read...
+* Updating tests for calculate_checksums... 
+* Adding a new test to ensure that this edge case is handled...
+* Running tests to make sure that things work as expected...
+* All tests pass, I added a new test in compress_test.go and updated the other compression tests in zipfile_test.go and tarfile_test.go to make sure that they also test out this edge case. 
+
+
+BAD EXAMPLES:
+* I think I found a but in user.c where it has a race condition, no wait, I am not sure about that actually - maybe it would be better to look at service.c but I'm not sure. What if I look over in account.c to see what it does?
+* Reading file UserAccount.java
+* Scanning for bugs
+* I wonder if there's logic in main.go that accounts for this behavior. No, what about user.go? Actually, wait, the user said "don't look in user.go" so I shouldn't do that..."
+* I'll continue reading to find the conversation handling logic.
+* I'll continue to search for user login code. 
+* I'll keep listing files.
+* I will continue to read this file.
+* Reading more of users.c
+* Opening file.cpp
+* Editing user.go
+* Updating PlanningTool.cs
+`
+
 const MODES: Mode[] = [
   {
     id: MODE_IDS.ASK,
@@ -295,5 +353,9 @@ export function getAllModes(): Mode[] {
 }
 
 export function getMode(id: string): Mode | undefined {
-  return MODES.find((m) => m.id === id);
+  let mode = MODES.find((m) => m.id === id);
+  if (mode !== undefined) {
+    mode.systemPrompt = mode.systemPrompt + "\n\n" + conversationPrompt;
+  }
+  return mode;
 }
