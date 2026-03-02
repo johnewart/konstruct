@@ -36,9 +36,7 @@ import { useMantineColorScheme, useComputedColorScheme } from '@mantine/core';
 import { IconSun, IconMoon } from '@tabler/icons-react';
 import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
-import { RunPodPage } from './pages/RunPod';
-import { VMsPage } from './pages/VMs';
-import { ProjectsPage } from './pages/Projects';
+import { ConfigurationPage } from './pages/Configuration';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
 import './index.css';
@@ -119,9 +117,12 @@ function TopNav() {
   const location = useLocation();
   const isChat =
     location.pathname === '/' || location.pathname.startsWith('/chat/');
-  const isRunPod = location.pathname === '/runpod';
-  const isVMs = location.pathname === '/vms';
-  const isProjects = location.pathname === '/projects';
+  const isConfig =
+    location.pathname === '/config' ||
+    location.pathname === '/runpod' ||
+    location.pathname === '/vms' ||
+    location.pathname === '/projects' ||
+    location.pathname === '/providers';
   const isCli = location.pathname === '/cli';
 
   return (
@@ -148,37 +149,15 @@ function TopNav() {
         </Link>
 
         <Link
-          to="/runpod"
+          to="/config"
           style={{
-            fontWeight: isRunPod ? 600 : 400,
+            fontWeight: isConfig ? 600 : 400,
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
           }}
         >
-          Configure RunPod
-        </Link>
-        <Link
-          to="/vms"
-          style={{
-            fontWeight: isVMs ? 600 : 400,
-            color: 'var(--app-text)',
-            textDecoration: 'none',
-            fontSize: 14,
-          }}
-        >
-          VMs
-        </Link>
-        <Link
-          to="/projects"
-          style={{
-            fontWeight: isProjects ? 600 : 400,
-            color: 'var(--app-text)',
-            textDecoration: 'none',
-            fontSize: 14,
-          }}
-        >
-          Projects
+          Configuration
         </Link>
         <Link
           to="/cli"
@@ -216,9 +195,11 @@ function App() {
           <Route path="/chat" element={<Navigate to="/" replace />} />
           <Route path="/chat/:sessionId" element={<Chat />} />
           <Route path="/doc/:id" element={<DocumentPage />} />
-          <Route path="/runpod" element={<RunPodPage />} />
-          <Route path="/vms" element={<VMsPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/config" element={<ConfigurationPage />} />
+          <Route path="/runpod" element={<Navigate to="/config?tab=runpod" replace />} />
+          <Route path="/vms" element={<Navigate to="/config?tab=vms" replace />} />
+          <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
+          <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
           <Route path="/cli" element={<FallbackCli />} />
         </Routes>
       </Box>

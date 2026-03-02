@@ -120,9 +120,6 @@ export function ProjectsPage() {
       <Group justify="space-between" align="center">
         <Title order={3}>Projects</Title>
         <Group>
-          <Link to="/" style={{ textDecoration: 'none', color: 'var(--app-text)' }}>
-            <Text size="sm">← Back to Chat</Text>
-          </Link>
           <Button
             leftSection={<IconPlus size={16} />}
             variant="light"

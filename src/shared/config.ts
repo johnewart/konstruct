@@ -237,6 +237,38 @@ export function saveGlobalConfig(config: KonstructConfig): void {
 }
 
 /**
+ * Load only the project config file (.konstruct/config.yml). No global merge.
+ * Use when reading/writing project-scoped config (e.g. providers for this project).
+ */
+export function loadProjectOnlyConfig(projectRoot: string): KonstructConfig {
+  if (!projectRoot) return normalize({});
+  const projectPath = getProjectConfigPath(projectRoot);
+  if (!existsSync(projectPath)) return normalize({});
+  try {
+    const content = readFileSync(projectPath, 'utf-8');
+    const parsed = parse(content) as Record<string, unknown> | null;
+    return normalize(parsed && typeof parsed === 'object' ? parsed : {});
+  } catch (e) {
+    log.warn('Failed to load project-only config', projectPath, e);
+    return normalize({});
+  }
+}
+
+/**
+ * Save config to the project file only (.konstruct/config.yml).
+ * Creates .konstruct directory if needed. Clears that project's merged cache.
+ */
+export function saveProjectConfig(config: KonstructConfig, projectRoot: string): void {
+  if (!projectRoot) return;
+  const projectPath = getProjectConfigPath(projectRoot);
+  const dir = path.dirname(projectPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const obj = config as unknown as Record<string, unknown>;
+  writeFileSync(projectPath, stringify(obj), 'utf-8');
+  cache.delete(projectRoot);
+}
+
+/**
  * Load config for a project: global config then project overlay (deep merge).
  * Global: ~/.config/konstruct/config.yml
  * Project: <projectRoot>/.konstruct/config.yml (overrides global when present).

@@ -273,7 +273,7 @@ export function getAllProviders(projectRoot: string): {
   const isKnown =
     rawProvider &&
     (['anthropic', 'bedrock', 'runpod', 'ollama', 'openai'].includes(rawProvider.toLowerCase()) ||
-    getProviderById(c, rawProvider);
+      getProviderById(c, rawProvider));
   const defaultProviderId: string = isKnown ? rawProvider : 'openai';
   return { providers, defaultProviderId };
 }
