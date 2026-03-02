@@ -717,6 +717,23 @@ export function Chat() {
       { role: 'user', content: pendingUserMessage } as ChatMsg,
     ];
   }, [displayMessages, pendingUserMessage]);
+
+  /* Hide tool messages and assistant "Used N tool(s)" placeholders in chat window (still in transcript) */
+  const chatWindowMessages = useMemo(
+    () =>
+      displayMessagesWithPending.filter((msg) => {
+        if (msg.role === 'tool') return false;
+        if (
+          msg.role === 'assistant' &&
+          msg.toolCalls?.length &&
+          !(msg.content?.trim())
+        )
+          return false;
+        return true;
+      }),
+    [displayMessagesWithPending]
+  );
+
   const todos = session?.todos ?? [];
   const workLogEntriesFromMessages = useMemo(
     () => buildWorkLogEntries(messages),
@@ -874,47 +891,33 @@ export function Chat() {
   return (
     <div className="chat-layout">
       <aside className="chat-sidebar">
-        <Accordion defaultValue="sessions" multiple>
+        <Accordion defaultValue={['sessions']} multiple>
           <Accordion.Item value="sessions">
-            <Accordion.Control>Sessions</Accordion.Control>
-            <Accordion.Panel>
-              <div className="chat-sidebar__header" style={{ flexShrink: 0 }}>
+            <Accordion.Control>
+              <Group justify="space-between" wrap="nowrap" gap="xs">
+                <span>Sessions</span>
                 <Button
                   type="button"
                   variant="subtle"
                   size="xs"
-                  fullWidth
-                  onClick={() => createSession.mutate({})}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    createSession.mutate({});
+                  }}
                   loading={createSession.isPending}
                 >
-                  New chat
+                  New
                 </Button>
-              </div>
-              <ScrollArea h={400} type="always">
-                <ul
-                  className="chat-sidebar__list"
-                  style={{
-                    padding: 0,
-                    margin: 0,
-                    listStyle: 'none',
-                    width: '100%',
-                    maxHeight: 'calc(100% - 32px)',
-                    overflowY: 'auto',
-                  }}
-                >
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel
+              className="chat-sidebar__sessions-panel"
+              style={{ padding: '2px 0' }}
+            >
+              <div className="chat-sidebar__sessions-inner">
+                <ul className="chat-sidebar__list chat-sidebar__list--sessions">
                   {sessions?.map((s) => (
-                    <li
-                      key={s.id}
-                      style={{
-                        padding: '2px 8px',
-                        margin: '1px 0',
-                        minHeight: '24px',
-                        backgroundColor:
-                          sessionId === s.id
-                            ? 'var(--app-hover)'
-                            : 'transparent',
-                      }}
-                    >
+                    <li key={s.id} className="chat-sidebar__session-li">
                       {editingSessionId === s.id ? (
                         <form
                           className="chat-session-edit"
@@ -954,49 +957,28 @@ export function Chat() {
                             autoFocus
                             size="xs"
                             styles={{
-                              input: { fontSize: '0.85em', minHeight: 28 },
+                              input: { fontSize: '0.85em', minHeight: 24 },
                             }}
                           />
                         </form>
                       ) : (
                         <div
-                          className="chat-session-item"
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            fontSize: '0.8em',
-                            height: '24px',
-                            backgroundColor:
-                              sessionId === s.id
-                                ? 'var(--app-hover)'
-                                : 'transparent',
-                            cursor: 'pointer',
-                          }}
+                          className={`chat-session-item ${sessionId === s.id ? 'active' : ''}`}
                         >
                           <Link
                             to={`/chat/${s.id}`}
-                            className={sessionId === s.id ? 'active' : ''}
                             onDoubleClick={() => {
                               setEditingSessionId(s.id);
                               setNewSessionTitle(s.title || 'Chat');
                             }}
-                            style={{
-                              flex: 1,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              color: 'var(--app-text)',
-                              textDecoration: 'none',
-                              backgroundColor: 'transparent',
-                            }}
+                            className="chat-sidebar__session-link"
                           >
                             {s.title || 'Chat'}
                           </Link>
                           <ActionIcon
                             type="button"
                             variant="subtle"
-                            size="sm"
+                            size="xs"
                             color="gray"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1018,47 +1000,27 @@ export function Chat() {
                     </li>
                   ))}
                 </ul>
-              </ScrollArea>
+              </div>
             </Accordion.Panel>
           </Accordion.Item>
 
           <Accordion.Item value="plans">
             <Accordion.Control>Plans</Accordion.Control>
             <Accordion.Panel
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                flex: 1,
-                minHeight: 0,
-                maxHeight: '25%',
-              }}
+              className="chat-sidebar__plans-panel"
+              style={{ padding: '8px 0' }}
             >
-              <ScrollArea style={{ flex: 1, minHeight: 0 }} type="always">
-                <ul
-                  className="chat-sidebar__list"
-                  style={{
-                    padding: 0,
-                    margin: 0,
-                    listStyle: 'none',
-                    width: '100%',
-                    maxHeight: 'calc(100% - 32px)',
-                    overflowY: 'auto',
-                  }}
-                >
+              <div className="chat-sidebar__plans-inner">
+                <ul className="chat-sidebar__list chat-sidebar__list--plans">
                   {plans && plans.length > 0 ? (
                     plans.map((p) => (
-                      <li
-                        key={p.name}
-                        style={{
-                          padding: '4px 12px',
-                          margin: '2px 0',
-                        }}
-                      >
+                      <li key={p.name}>
                         <Button
                           type="button"
                           variant="subtle"
                           size="xs"
                           fullWidth
+                          className="chat-sidebar__plan-btn"
                           style={{ justifyContent: 'flex-start' }}
                           onClick={() => setPlanModalName(p.name)}
                           draggable={true}
@@ -1072,58 +1034,45 @@ export function Chat() {
                       </li>
                     ))
                   ) : (
-                    <li
-                      className="chat-sidebar__empty"
-                      style={{
-                        padding: '8px 12px',
-                        margin: '2px 0',
-                      }}
-                    >
-                      No plans yet
-                    </li>
+                    <li className="chat-sidebar__empty">No plans yet</li>
                   )}
                 </ul>
-              </ScrollArea>
+              </div>
             </Accordion.Panel>
           </Accordion.Item>
 
           <Accordion.Item value="rules">
-            <Accordion.Control>Rules</Accordion.Control>
-            <Accordion.Panel
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                flex: 1,
-                minHeight: 0,
-                maxHeight: '25%',
-              }}
-            >
-              <ScrollArea style={{ flex: 1, minHeight: 0 }} type="always">
-                <ul
-                  className="chat-sidebar__list"
-                  style={{
-                    padding: 0,
-                    margin: 0,
-                    listStyle: 'none',
-                    width: '100%',
-                    maxHeight: 'calc(100% - 64px)',
-                    overflowY: 'auto',
+            <Accordion.Control>
+              <Group justify="space-between" wrap="nowrap" gap="xs">
+                <span>Rules</span>
+                <Button
+                  type="button"
+                  variant="subtle"
+                  size="xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRuleModalName('__new__');
                   }}
                 >
+                  Add rule
+                </Button>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel
+              className="chat-sidebar__rules-panel"
+              style={{ padding: '8px 0' }}
+            >
+              <div className="chat-sidebar__rules-inner">
+                <ul className="chat-sidebar__list chat-sidebar__list--rules">
                   {rules && rules.length > 0 ? (
                     rules.map((r) => (
-                      <li
-                        key={r.name}
-                        style={{
-                          padding: '4px 12px',
-                          margin: '2px 0',
-                        }}
-                      >
+                      <li key={r.name}>
                         <Button
                           type="button"
                           variant="subtle"
                           size="xs"
                           fullWidth
+                          className="chat-sidebar__rule-btn"
                           style={{ justifyContent: 'flex-start' }}
                           onClick={() => setRuleModalName(r.name)}
                         >
@@ -1132,43 +1081,10 @@ export function Chat() {
                       </li>
                     ))
                   ) : (
-                    <li
-                      className="chat-sidebar__empty"
-                      style={{
-                        padding: '8px 12px',
-                        margin: '2px 0',
-                      }}
-                    >
-                      No rules yet
-                    </li>
+                    <li className="chat-sidebar__empty">No rules yet</li>
                   )}
-                  <li
-                    style={{
-                      padding: '4px 12px',
-                      margin: '2px 0',
-                      borderTop: '1px solid #eee',
-                    }}
-                  >
-                    <form
-                      className="chat-rules-add"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        setRuleModalName('__new__');
-                      }}
-                      style={{ margin: 0 }}
-                    >
-                      <Button
-                        type="submit"
-                        variant="subtle"
-                        size="xs"
-                        fullWidth
-                      >
-                        Add rule
-                      </Button>
-                    </form>
-                  </li>
                 </ul>
-              </ScrollArea>
+              </div>
             </Accordion.Panel>
           </Accordion.Item>
         </Accordion>
@@ -1293,22 +1209,67 @@ export function Chat() {
                   typeof (current as { url?: string }).url === 'string'
                     ? (current as { url: string }).url
                     : null;
-                return providerUrl ? (
-                  <Tooltip label="Click to copy">
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      style={{
-                        fontFamily: 'monospace',
-                        fontSize: '0.7rem',
-                        cursor: 'pointer',
-                      }}
-                      onClick={() => navigator.clipboard.writeText(providerUrl)}
-                    >
-                      {providerUrl}
-                    </Text>
-                  </Tooltip>
-                ) : null;
+                const isRunpod = providerId === 'runpod';
+                const podDot = isRunpod
+                  ? (() => {
+                      const accessible =
+                        defaultPod &&
+                        runpodIsRunning &&
+                        runpodV1Connectivity?.reachable === true;
+                      const starting =
+                        defaultPod && runpodIsRunning && !accessible;
+                      const off = !defaultPod || !runpodIsRunning;
+                      const color = accessible
+                        ? 'var(--mantine-color-green-6)'
+                        : starting
+                          ? 'var(--mantine-color-yellow-6)'
+                          : 'var(--mantine-color-red-6)';
+                      const label = accessible
+                        ? 'Pod accessible'
+                        : starting
+                          ? 'Pod starting'
+                          : 'Pod off';
+                      return (
+                        <Tooltip label={label}>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              backgroundColor: color,
+                              marginRight: 6,
+                              verticalAlign: 'middle',
+                            }}
+                            aria-hidden
+                          />
+                        </Tooltip>
+                      );
+                    })()
+                  : null;
+                return (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    {podDot}
+                    {providerUrl ? (
+                      <Tooltip label="Click to copy">
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          style={{
+                            fontFamily: 'monospace',
+                            fontSize: '0.7rem',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() =>
+                            navigator.clipboard.writeText(providerUrl)
+                          }
+                        >
+                          {providerUrl}
+                        </Text>
+                      </Tooltip>
+                    ) : null}
+                  </span>
+                );
               })()}
             </div>
             <div
@@ -1346,7 +1307,7 @@ export function Chat() {
               <div className="chat-messages-wrap">
                 <div className="chat-messages" ref={chatMessagesRef}>
                   {/* Limit messages to prevent UI slowdown with long conversations */}
-                  {displayMessagesWithPending.slice(-100).map((msg, i) => (
+                  {chatWindowMessages.slice(-100).map((msg, i) => (
                     <ChatMessage key={i} message={msg} compact />
                   ))}
                   {isRunInProgress && (
@@ -1397,8 +1358,29 @@ export function Chat() {
                     >
                       {modes.find((m) => m.id === modeId)?.name || 'Unknown'}
                     </span>
+                    <span
+                      className="chat-mode-indicator__model"
+                      style={{ marginLeft: 'auto' }}
+                    >
+                      <span className="chat-mode-label">Model:</span>
+                      <span className="chat-mode-name">
+                        {providerId && providers.length
+                          ? (() => {
+                              const current = providers.find(
+                                (p) => p.id === providerId
+                              ) as { defaultModel?: string } | undefined;
+                              const model =
+                                providerId === 'runpod'
+                                  ? selectedRunpodModelId ?? current?.defaultModel
+                                  : current?.defaultModel;
+                              return model ?? '—';
+                            })()
+                          : '—'}
+                      </span>
+                    </span>
                   </div>
                 )}
+                <div className="chat-form-wrap">
                 <form className="chat-form" onSubmit={handleSubmit}>
                   <Textarea
                     value={input}
@@ -1434,18 +1416,28 @@ export function Chat() {
                     )}
                   </div>
                 </form>
+                {modes && modes.length > 0 && (
+                  <div className="chat-form-mode-image">
+                    <img
+                      src={`/static/konstruct-${
+                        ({ ask: 'ask', planning: 'planner', research: 'researcher', architecture: 'architect', implementation: 'builder' } as Record<string, string>)[
+                          modeId
+                        ] ?? 'builder'
+                      }.png`}
+                      alt=""
+                      className="chat-form-mode-image__img"
+                    />
+                  </div>
+                )}
+                </div>
               </div>
               <aside className="chat-right-panel">
-                <Accordion defaultValue="todos" multiple>
+                <Accordion defaultValue={['todos']} multiple>
                   <Accordion.Item value="todos">
                     <Accordion.Control>
                       <h3 className="chat-panel-section__title">Todos</h3>
                     </Accordion.Control>
-                    <Accordion.Panel
-                      style={{
-                        padding: '8px 0',
-                      }}
-                    >
+                    <Accordion.Panel className="chat-panel-todos">
                       {/* Add todo form - always visible at top */}
                       <form
                         className="chat-todos-add"

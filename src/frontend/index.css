@@ -487,17 +487,149 @@ body {
 .chat-sidebar {
   flex: 0 0 clamp(220px, 22vw, 300px);
   min-width: 0;
-  background: var(--app-surface);
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  padding: clamp(12px, 1.5vw, 16px);
+  background: var(--app-hover);
+  border-right: 1px solid var(--app-border);
+  padding: 0 clamp(12px, 1.5vw, 16px) clamp(12px, 1.5vw, 16px);
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
+}
+
+.chat-sidebar [data-accordion] {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: calc(100% + 2 * clamp(12px, 1.5vw, 16px));
+  margin-left: calc(-1 * clamp(12px, 1.5vw, 16px));
+  margin-right: calc(-1 * clamp(12px, 1.5vw, 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Closed items: header height only. Open items: share space equally (same as right panel) */
+.chat-sidebar [data-accordion] > * {
+  flex: 0 0 auto;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.chat-sidebar [data-accordion] > [data-active] {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-sidebar [data-accordion] > [data-active] > *:last-child {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-sidebar [data-accordion] > [data-active] > *:last-child > div {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+/* Collapsed panel must take zero space (no gap between e.g. Plans and Rules) */
+.chat-sidebar [data-accordion] > *:not([data-active]) > *:last-child {
+  min-height: 0 !important;
+  max-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+.chat-sidebar [data-accordion] > *:not([data-active]) > *:last-child > div {
+  min-height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
 }
 
 .chat-sidebar__section {
   margin-bottom: 16px;
+}
+
+/* Sessions section – tight padding, scrollable, add button in title */
+.chat-sidebar__sessions-panel {
+  overflow: hidden;
+  margin-left: -8px;
+  padding-left: 8px;
+}
+
+.chat-sidebar__sessions-inner {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-sidebar__list--sessions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+}
+
+.chat-sidebar__session-li {
+  margin: 0;
+  padding: 0;
+}
+
+.chat-sidebar__session-li + .chat-sidebar__session-li {
+  margin-top: 0;
+}
+
+.chat-sidebar__session-li .chat-session-edit {
+  margin: 0;
+  padding: 0 4px;
+}
+
+.chat-sidebar__list--sessions .chat-session-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82em;
+  min-height: 20px;
+  padding: 0 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.chat-session-item:hover,
+.chat-session-item.active {
+  background: var(--app-hover);
+}
+
+.chat-sidebar__session-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text);
+  text-decoration: none;
+  padding: 0;
+}
+
+.chat-sidebar__session-link:hover,
+.chat-session-item.active .chat-sidebar__session-link {
+  color: var(--app-accent);
 }
 
 .chat-sidebar__section--sessions {
@@ -542,27 +674,139 @@ body {
   margin-bottom: 8px;
 }
 
+.chat-sidebar__plans-panel {
+  text-align: left;
+  overflow: hidden;
+}
+
+.chat-sidebar__plans-inner {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-sidebar__plans-inner,
+.chat-sidebar__plans-inner * {
+  text-align: left !important;
+}
+
 .chat-sidebar__list--plans {
   flex: 1;
   min-height: 0;
+  max-height: 100%;
   overflow-y: auto;
   margin-bottom: 0;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+  text-align: left;
+}
+
+.chat-sidebar__list--plans li {
+  margin-bottom: 0;
+  padding: 0;
+}
+
+.chat-sidebar__list--plans li + li {
+  margin-top: 2px;
+}
+
+.chat-sidebar__list--plans .chat-sidebar__empty {
+  padding: 6px 8px;
+  margin: 0;
+  text-align: left;
 }
 
 .chat-sidebar__plan-btn {
-  display: block;
+  display: flex !important;
   width: 100%;
-  text-align: left;
-  padding: 6px 12px;
+  text-align: left !important;
+  padding: 4px 8px;
   border: none;
-  border-radius: 6px;
+  font-weight: normal !important;
+  border-radius: 4px;
   background: none;
   color: var(--app-text);
   cursor: pointer;
   font-size: 0.8em;
+  justify-content: flex-start !important;
+}
+
+.chat-sidebar__plan-btn * {
+  text-align: left !important;
+  justify-content: flex-start !important;
+  font-weight: inherit !important;
 }
 
 .chat-sidebar__plan-btn:hover {
+  background: var(--app-accent-bg);
+  color: var(--app-accent);
+}
+
+/* Rules section – same as plans: left-aligned, tight, scrollable */
+.chat-sidebar__rules-panel {
+  text-align: left;
+  overflow: hidden;
+}
+
+.chat-sidebar__rules-inner,
+.chat-sidebar__rules-inner * {
+  text-align: left !important;
+}
+
+.chat-sidebar__rules-inner {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-sidebar__list--rules {
+  flex: 1;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  margin-bottom: 0;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+  text-align: left;
+}
+
+.chat-sidebar__list--rules li {
+  margin-bottom: 0;
+  padding: 0;
+}
+
+.chat-sidebar__list--rules li + li {
+  margin-top: 2px;
+}
+
+.chat-sidebar__list--rules .chat-sidebar__empty {
+  padding: 6px 8px;
+  margin: 0;
+  text-align: left;
+}
+
+.chat-sidebar__rule-btn {
+  display: flex !important;
+  width: 100%;
+  text-align: left !important;
+  padding: 4px 8px;
+  border: none;
+  font-weight: normal !important;
+  border-radius: 4px;
+  background: none;
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 0.8em;
+  justify-content: flex-start !important;
+}
+
+.chat-sidebar__rule-btn * {
+  text-align: left !important;
+  justify-content: flex-start !important;
+  font-weight: inherit !important;
+}
+
+.chat-sidebar__rule-btn:hover {
   background: var(--app-accent-bg);
   color: var(--app-accent);
 }
@@ -631,10 +875,6 @@ body {
 .chat-sidebar__list a.active {
   background: var(--app-accent-bg);
   color: var(--app-accent);
-}
-
-.chat-sidebar__list--plans {
-  max-height: 100%;
 }
 
 .chat-sidebar__list--rules {
@@ -914,6 +1154,132 @@ body {
   overflow: hidden;
 }
 
+.chat-right-panel [data-accordion] {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Closed items: header height only. Open items: share space equally */
+.chat-right-panel [data-accordion] > * {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.chat-right-panel [data-accordion] > [data-active] {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-right-panel [data-accordion] > [data-active] > *:last-child {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-right-panel [data-accordion] > [data-active] > *:last-child > div {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+/* Left sidebar: single border per section (item only; control has no border to avoid double line) */
+.chat-sidebar [data-accordion] > * {
+  border-bottom: 1px solid var(--app-border);
+  border-left: none;
+  border-right: none;
+  border-top: none;
+}
+
+.chat-sidebar [data-accordion] > *:last-child {
+  border-bottom: none;
+}
+
+.chat-sidebar [data-accordion] [data-accordion-control] {
+  border-bottom: none !important;
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+/* Unified accordion headers: same size, font (right has control border, left uses item border above) */
+.chat-sidebar [data-accordion] [data-accordion-control],
+.chat-right-panel [data-accordion] [data-accordion-control] {
+  padding: 6px 14px;
+  min-height: 32px;
+  align-items: center;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--app-text-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-radius: 0;
+}
+
+.chat-right-panel [data-accordion] [data-accordion-control] {
+  border-bottom: 1px solid var(--app-border);
+}
+
+/* No gap between collapsed items on the right */
+.chat-right-panel [data-accordion] > * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.chat-right-panel [data-accordion] > * + * {
+  margin-top: 0 !important;
+}
+
+/* Collapsed panel must take zero space (removes gap between e.g. Git Changes and Queued Messages) */
+.chat-right-panel [data-accordion] > *:not([data-active]) > *:last-child {
+  min-height: 0 !important;
+  max-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+.chat-right-panel [data-accordion] > *:not([data-active]) > *:last-child > div {
+  min-height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+
+.chat-sidebar [data-accordion] [data-accordion-control] > span:last-of-type,
+.chat-right-panel [data-accordion] [data-accordion-control] > span:last-of-type {
+  padding: 0;
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-right-panel [data-accordion] [data-accordion-control] .chat-panel-section__title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-panel-section {
   padding: 12px 14px;
   border-bottom: 1px solid var(--app-border);
@@ -950,8 +1316,9 @@ body {
 
 .chat-work-log {
   font-size: 0.85em;
-  overflow-y: auto;
+  max-height: 200px;
   min-height: 0;
+  overflow-y: auto;
 }
 
 /* Fixed-height container for active status (bullets + "Thinking…"); scrolls when content overflows */
@@ -1097,8 +1464,9 @@ body {
 /* Git changes tracking */
 .chat-git-changes {
   font-size: 0.85em;
-  overflow-y: auto;
+  max-height: 200px;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .chat-git-changes__list {
@@ -1297,11 +1665,15 @@ body {
   color: var(--app-danger-text);
 }
 
+.chat-panel-todos {
+  padding: 4px 0 8px !important;
+}
+
 .chat-todos-add,
 .chat-rules-add {
   display: flex;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .chat-todos-add__input {
@@ -1438,12 +1810,40 @@ body {
   margin: 0;
 }
 
-.chat-form {
+.chat-form-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
   padding: 12px clamp(16px, 2vw, 20px);
   border-top: 1px solid var(--app-border);
+  min-height: 0;
+}
+
+.chat-form {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 0;
+  border-top: none;
+}
+
+.chat-form-mode-image {
+  flex: 0 0 clamp(120px, 18vw, 200px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 80px;
+}
+
+.chat-form-mode-image__img {
+  width: 100%;
+  height: 100%;
+  max-height: 140px;
+  object-fit: contain;
+  object-position: center;
 }
 
 .chat-form textarea {
