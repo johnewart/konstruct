@@ -23,7 +23,7 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { parse, stringify } from 'yaml';
-import { createLogger } from './logger';
+import { createLogger } from './logger.ts';
 
 const log = createLogger('config');
 

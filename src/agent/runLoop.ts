@@ -24,6 +24,7 @@ import './tools/runners';
 import { getToolsForMode } from './toolDefinitions';
 import { getMode } from './modes';
 import { createLogger } from '../shared/logger';
+import { analyzeConversationPattern } from './supervisor';
 
 const log = createLogger('agent');
 
@@ -148,7 +149,7 @@ export async function runAgentLoop(
       messages.filter((m) => m.role !== 'system') as sessionStore.ChatMessage[]
     );
 
-    const maxIterations = 50;
+    const maxIterations = Infinity;
     let iteration = 0;
 
     while (iteration < maxIterations) {
@@ -162,6 +163,28 @@ export async function runAgentLoop(
         signal,
         sessionId,
       });
+      
+      // Fire-and-forget supervisor check every 10-15 turns
+      if (messages.length % 15 === 0) {
+        setTimeout(() => {
+          const recent = messages.slice(-50);
+          const analysis = analyzeConversationPattern(recent);
+
+          if (analysis.intervention) {
+            // High-priority stop command
+            sessionStore.addMessage(sessionId, {
+              role: 'user',
+              content: '[Agent supervisor]: Stop. This path is unlikely to succeed. Please reset or ask for user guidance.'
+            });
+          } else if (analysis.suggestion) {
+            // Gentle optimization nudge
+            sessionStore.addMessage(sessionId, {
+              role: 'user',
+              content: `[Agent supervisor]: ${analysis.suggestion}`
+            });
+          }
+        }, 0); // Async, non-blocking
+      }
 
       log.debug(
         'llm.chat returned',

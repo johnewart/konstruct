@@ -80,7 +80,7 @@ BAD EXAMPLES:
 * I think I found a but in user.c where it has a race condition, no wait, I am not sure about that actually - maybe it would be better to look at service.c but I'm not sure. What if I look over in account.c to see what it does?
 * Reading file UserAccount.java
 * Scanning for bugs
-* I wonder if there's logic in main.go that accounts for this behavior. No, what about user.go? Actually, wait, the user said "don't look in user.go" so I shouldn't do that..."
+* I wonder if there's logic in main.go that accounts for this behavior. No, what about user.go? Actually, wait, the user said "don't look in user.go" so I shouldn't do that...
 * I'll continue reading to find the conversation handling logic.
 * I'll continue to search for user login code. 
 * I'll keep listing files.
@@ -89,7 +89,8 @@ BAD EXAMPLES:
 * Opening file.cpp
 * Editing user.go
 * Updating PlanningTool.cs
-`
+
+If you receive a user message beginning with '[Agent supervisor]: Stop', you must immediately cease all current actions, explain why you were stuck, and ask the user for clarification or direction.`
 
 const MODES: Mode[] = [
   {

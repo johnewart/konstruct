@@ -21,8 +21,8 @@ import {
   getProjectIdForRoot,
   getActiveProjectRoot,
   getActiveProjectId,
-} from './config';
-import { createLogger } from './logger';
+} from './config.ts';
+import { createLogger } from './logger.ts';
 
 const log = createLogger('sessionStore');
 
@@ -261,6 +261,22 @@ export function updateSessionMessages(
   entry.session.messages = messages;
   entry.session.updatedAt = new Date();
   log.debug('updateSessionMessages', id, 'messages:', messages.length);
+  saveSessionToProject(entry.session, entry.projectId);
+  return entry.session;
+}
+
+/**
+ * Append a single message to a session. Session must already be in memory (e.g. during an active run).
+ */
+export function addMessage(
+  sessionId: string,
+  message: ChatMessage
+): Session | undefined {
+  const entry = sessionById.get(sessionId);
+  if (!entry) return undefined;
+  entry.session.messages.push(message);
+  entry.session.updatedAt = new Date();
+  log.debug('addMessage', sessionId, message.role);
   saveSessionToProject(entry.session, entry.projectId);
   return entry.session;
 }
