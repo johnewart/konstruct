@@ -19,6 +19,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 const RUNPOD_CONFIG_KEY = 'runpod-config';
 const RUNPOD_CHAT_MODEL_KEY = 'runpod-chat-model';
 const CHAT_PROVIDER_KEY = 'chat-provider-id';
+const CHAT_MODEL_KEY = 'chat-model-id';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
@@ -34,6 +35,7 @@ import {
   Group,
   Tooltip,
   Text,
+  Menu,
 } from '@mantine/core';
 import { IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react';
 
@@ -129,7 +131,7 @@ function getStatusIcon(status: string): string {
   }
 }
 
-const MAX_CONTEXT_TOKENS = 200_000;
+const DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_000;
 
@@ -338,6 +340,10 @@ export function Chat() {
     if (typeof window === 'undefined') return null;
     return localStorage.getItem(RUNPOD_CHAT_MODEL_KEY);
   });
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(CHAT_MODEL_KEY);
+  });
   useEffect(() => {
     if (runpodModels.length === 0) return;
     const current = selectedRunpodModelId;
@@ -348,19 +354,49 @@ export function Chat() {
       if (first) localStorage.setItem(RUNPOD_CHAT_MODEL_KEY, first);
     }
   }, [runpodModels, selectedRunpodModelId]);
+  const configuredProviders = useMemo(
+    () => providers.filter((p) => (p as { configured?: boolean }).configured === true),
+    [providers]
+  );
   useEffect(() => {
     if (providers.length === 0) return;
-    const inList =
-      providerId != null && providers.some((p) => p.id === providerId);
-    if (inList) return;
+    const currentConfigured =
+      providerId != null && configuredProviders.some((p) => p.id === providerId);
+    if (currentConfigured) return;
     const next =
-      defaultProviderId && providers.some((p) => p.id === defaultProviderId)
+      defaultProviderId && configuredProviders.some((p) => p.id === defaultProviderId)
         ? defaultProviderId
-        : providers[0].id;
-    setProviderId(next);
-    if (typeof window !== 'undefined')
-      localStorage.setItem(CHAT_PROVIDER_KEY, next);
-  }, [providers, defaultProviderId, providerId]);
+        : configuredProviders[0]?.id ?? providers[0]?.id;
+    if (next) {
+      setProviderId(next);
+      if (typeof window !== 'undefined')
+        localStorage.setItem(CHAT_PROVIDER_KEY, next);
+    }
+  }, [providers, configuredProviders, defaultProviderId, providerId]);
+  const allModelOptions = useMemo(() => {
+    const list: { providerId: string; providerName: string; modelId: string; modelName: string }[] = [];
+    for (const p of configuredProviders) {
+      const prov = p as { defaultModel?: string; models?: { id: string; name: string }[] };
+      const isRunpod = p.id === 'runpod';
+      const models =
+        isRunpod && runpodModels.length > 0
+          ? runpodModels.map((m) => ({ id: m.id, name: m.name ?? m.id }))
+          : prov.models?.length
+            ? prov.models
+            : prov.defaultModel
+              ? [{ id: prov.defaultModel, name: prov.defaultModel }]
+              : [];
+      for (const m of models) {
+        list.push({
+          providerId: p.id,
+          providerName: p.name,
+          modelId: m.id,
+          modelName: m.name || m.id,
+        });
+      }
+    }
+    return list;
+  }, [configuredProviders, runpodModels]);
   useEffect(() => {
     if (providerId !== 'runpod' || !defaultPodId) {
       setRunpodPods([]);
@@ -420,10 +456,15 @@ export function Chat() {
         }
       ).chat.sendMessage.mutate(input, signal ? { signal } : undefined);
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setRunCancelled(false);
       setRunPendingSince(Date.now());
-      if (sessionId) utils.sessions.get.invalidate({ id: sessionId });
+      if (sessionId) {
+        // Update session cache immediately so UI shows new messages (handles fast runs where refetch effect may not fire)
+        if (data) utils.sessions.get.setData({ id: sessionId }, data);
+        utils.sessions.get.invalidate({ id: sessionId });
+        void utils.sessions.get.refetch({ id: sessionId });
+      }
       utils.chat.listPlans.invalidate();
       utils.chat.listRules.invalidate();
     },
@@ -671,7 +712,9 @@ export function Chat() {
         providerId: providerId ?? 'openai',
         ...(providerId === 'runpod' && selectedRunpodModelId
           ? { model: selectedRunpodModelId }
-          : {}),
+          : selectedModelId
+            ? { model: selectedModelId }
+            : {}),
       });
       setInput('');
       setAttachments([]);
@@ -682,6 +725,7 @@ export function Chat() {
       modeId,
       providerId,
       selectedRunpodModelId,
+      selectedModelId,
       sendMessage,
       buildMessageContent,
       isRunInProgress,
@@ -798,11 +842,26 @@ export function Chat() {
     for (const m of messages) total += estimateMessageTokens(m);
     return total;
   }, [messages]);
+
+  const maxContextTokens = useMemo(() => {
+    const p = providers.find((x) => x.id === (providerId ?? defaultProviderId));
+    const modelId =
+      providerId === 'runpod'
+        ? selectedRunpodModelId
+        : selectedModelId;
+    const effectiveId = modelId ?? (p as { defaultModel?: string } | undefined)?.defaultModel;
+    if (!effectiveId || !p?.models?.length) return DEFAULT_MAX_CONTEXT_TOKENS;
+    const model = (p.models as { id: string; name: string; contextWindow?: number }[]).find(
+      (m) => m.id === effectiveId || m.name === effectiveId
+    );
+    return model?.contextWindow && model.contextWindow > 0 ? model.contextWindow : DEFAULT_MAX_CONTEXT_TOKENS;
+  }, [providers, providerId, defaultProviderId, selectedRunpodModelId, selectedModelId]);
+
   const contextWithDraft =
     contextTokens + Math.ceil(input.length / CHARS_PER_TOKEN_ESTIMATE);
   const contextPct = Math.min(
     100,
-    (contextWithDraft / MAX_CONTEXT_TOKENS) * 100
+    (contextWithDraft / maxContextTokens) * 100
   );
 
   const handleTextareaKeyDown = useCallback(
@@ -823,7 +882,9 @@ export function Chat() {
         providerId: providerId ?? 'openai',
         ...(providerId === 'runpod' && selectedRunpodModelId
           ? { model: selectedRunpodModelId }
-          : {}),
+          : selectedModelId
+            ? { model: selectedModelId }
+            : {}),
       });
       setInput('');
       setAttachments([]);
@@ -834,6 +895,7 @@ export function Chat() {
       modeId,
       providerId,
       selectedRunpodModelId,
+      selectedModelId,
       sendMessage,
       buildMessageContent,
     ]
@@ -1280,12 +1342,13 @@ export function Chat() {
                 <div
                   className="chat-context-bar__fill"
                   style={{ width: `${contextPct}%` }}
-                  title={`~${(contextWithDraft / 1000).toFixed(1)}k / ${(MAX_CONTEXT_TOKENS / 1000).toFixed(0)}k tokens`}
+                  title={`~${(contextWithDraft / 1000).toFixed(1)}k / ${(maxContextTokens / 1000).toFixed(0)}k tokens (${Math.round((contextWithDraft / maxContextTokens) * 100)}%)`}
                 />
               </div>
               <span className="chat-context-bar__value">
                 ~{(contextWithDraft / 1000).toFixed(1)}k /{' '}
-                {(MAX_CONTEXT_TOKENS / 1000).toFixed(0)}k
+                {(maxContextTokens / 1000).toFixed(0)}k (
+                {Math.round((contextWithDraft / maxContextTokens) * 100)}%)
               </span>
             </div>
             <div
@@ -1363,20 +1426,71 @@ export function Chat() {
                       style={{ marginLeft: 'auto' }}
                     >
                       <span className="chat-mode-label">Model:</span>
-                      <span className="chat-mode-name">
-                        {providerId && providers.length
-                          ? (() => {
-                              const current = providers.find(
-                                (p) => p.id === providerId
-                              ) as { defaultModel?: string } | undefined;
-                              const model =
-                                providerId === 'runpod'
-                                  ? selectedRunpodModelId ?? current?.defaultModel
-                                  : current?.defaultModel;
-                              return model ?? '—';
-                            })()
-                          : '—'}
-                      </span>
+                      <Menu position="bottom-end" width={280} shadow="md">
+                        <Menu.Target>
+                          <Tooltip label="Click to change model">
+                            <span
+                              className="chat-mode-name"
+                              style={{
+                                cursor: 'pointer',
+                                textDecoration: 'underline',
+                                textUnderlineOffset: 2,
+                              }}
+                            >
+                              {providerId && providers.length
+                                ? (() => {
+                                    const current = providers.find(
+                                      (p) => p.id === providerId
+                                    ) as { defaultModel?: string } | undefined;
+                                    const model =
+                                      providerId === 'runpod'
+                                        ? selectedRunpodModelId ?? current?.defaultModel
+                                        : selectedModelId ?? current?.defaultModel;
+                                    return model ?? '—';
+                                  })()
+                                : '—'}
+                            </span>
+                          </Tooltip>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          <Menu.Label>Provider / Model</Menu.Label>
+                          {allModelOptions.length === 0 ? (
+                            <Menu.Item disabled>No models available</Menu.Item>
+                          ) : (
+                            allModelOptions.map((opt) => {
+                              const isSelected =
+                                providerId === opt.providerId &&
+                                (opt.providerId === 'runpod'
+                                  ? selectedRunpodModelId === opt.modelId
+                                  : selectedModelId === opt.modelId);
+                              return (
+                                <Menu.Item
+                                  key={`${opt.providerId}:${opt.modelId}`}
+                                  onClick={() => {
+                                    setProviderId(opt.providerId);
+                                    if (opt.providerId === 'runpod') {
+                                      setSelectedRunpodModelId(opt.modelId);
+                                      if (typeof window !== 'undefined')
+                                        localStorage.setItem(RUNPOD_CHAT_MODEL_KEY, opt.modelId);
+                                    } else {
+                                      setSelectedModelId(opt.modelId);
+                                      if (typeof window !== 'undefined')
+                                        localStorage.setItem(CHAT_MODEL_KEY, opt.modelId);
+                                    }
+                                    if (typeof window !== 'undefined')
+                                      localStorage.setItem(CHAT_PROVIDER_KEY, opt.providerId);
+                                  }}
+                                  style={{
+                                    fontWeight: isSelected ? 600 : undefined,
+                                  }}
+                                >
+                                  {opt.providerName}: {opt.modelName}
+                                </Menu.Item>
+                              );
+                            })
+                          )}
+                        </Menu.Dropdown>
+                      </Menu>
                     </span>
                   </div>
                 )}
@@ -1700,10 +1814,11 @@ export function Chat() {
                                     ),
                                     modeId,
                                     providerId: providerId ?? 'openai',
-                                    ...(providerId === 'runpod' &&
-                                    selectedRunpodModelId
+                                    ...(providerId === 'runpod' && selectedRunpodModelId
                                       ? { model: selectedRunpodModelId }
-                                      : {}),
+                                      : selectedModelId
+                                        ? { model: selectedModelId }
+                                        : {}),
                                   });
                                   // Clear attachments after sending
                                   setAttachments([]);

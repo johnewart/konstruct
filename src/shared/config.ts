@@ -59,6 +59,8 @@ export type ConfigProvider = {
   endpoint?: string;
   /** AWS profile name for Bedrock (uses SDK default chain if unset). */
   aws_profile?: string;
+  /** RunPod: selected pod id (provider uses this pod's proxy URL). */
+  runpod_pod_id?: string;
   /** Managed list of models (name + context window) for this provider. */
   models?: ProviderModel[];
   max_tokens?: number;
@@ -67,10 +69,9 @@ export type ConfigProvider = {
 };
 
 export type KonstructConfig = {
-  /** Current default provider id and model (legacy + default). */
+  /** Current default provider (legacy + default). Model is per-provider. */
   llm: {
     provider?: string;
-    model?: string;
     api_key?: string;
     base_url?: string;
     max_tokens?: number;
@@ -98,7 +99,6 @@ export type KonstructConfig = {
 const defaultConfig: KonstructConfig = {
   llm: {
     provider: 'openai',
-    model: 'gpt-4',
     max_tokens: 4096,
     temperature: 0.7,
   },
@@ -174,7 +174,6 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       provider: (llm?.provider ??
         llm?.Provider ??
         defaultConfig.llm.provider) as string,
-      model: (llm?.model ?? llm?.Model ?? defaultConfig.llm.model) as string,
       api_key: (llm?.api_key ?? llm?.APIKey ?? llm?.apikey ?? '') as string,
       base_url: (llm?.base_url ?? llm?.BaseURL ?? llm?.baseurl ?? '') as string,
       max_tokens: (llm?.max_tokens ??
@@ -209,6 +208,7 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
             default_model: p?.default_model != null ? String(p.default_model) : undefined,
             endpoint: p?.endpoint != null ? String(p.endpoint) : undefined,
             aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
+            runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
             models: models?.length ? models : undefined,
             max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
             temperature: p?.temperature != null ? Number(p.temperature) : undefined,

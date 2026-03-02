@@ -37,22 +37,25 @@ const messageSchema = z.object({
 });
 
 export const sessionsRouter = router({
-  list: publicProcedure.query(() => {
-    if (process.env.AGENT_WORKER_URL) sessionStore.reloadSessions();
-    const list = sessionStore.listSessions();
-    log.debug('list', list.length, 'sessions');
+  list: publicProcedure.query(({ ctx }) => {
+    const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    const list = sessionStore.listSessions(projectId);
+    log.debug('list', projectId, list.length, 'sessions');
     return list;
   }),
 
   create: publicProcedure
     .input(z.object({ title: z.string().optional() }))
-    .mutation(({ input }) => sessionStore.createSession(input.title ?? 'Chat')),
+    .mutation(({ ctx, input }) => {
+      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      return sessionStore.createSession(input.title ?? 'Chat', projectId);
+    }),
 
   get: publicProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ input }) => {
-      if (process.env.AGENT_WORKER_URL) sessionStore.forceReloadSessions();
-      const session = sessionStore.getSession(input.id);
+    .query(({ ctx, input }) => {
+      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const session = sessionStore.getSession(input.id, projectId);
       if (!session) throw new Error('Session not found');
       return session;
     }),

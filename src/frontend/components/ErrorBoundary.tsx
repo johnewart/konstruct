@@ -15,12 +15,12 @@
  */
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { Box, Button, Code, Paper, Stack, Text } from '@mantine/core';
-import { IconRefresh } from '@tabler/icons-react';
+import { Box, Button, Code, Paper, Stack, Text, Group } from '@mantine/core';
+import { IconRefresh, IconCopy } from '@tabler/icons-react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
-  /** Optional fallback when no custom fallback is rendered */
+  /** Optional fallback when no custom fallback is rendered (error is still shown above it). */
   fallback?: ReactNode;
 }
 
@@ -58,13 +58,46 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     window.location.reload();
   };
 
+  handleCopyError = (): void => {
+    const { error, errorInfo } = this.state;
+    if (!error) return;
+    const parts = [
+      error.name && error.name !== 'Error' ? `${error.name}: ${error.message}` : error.message,
+      error.stack ?? '',
+      errorInfo?.componentStack ? `\nComponent stack:\n${errorInfo.componentStack}` : '',
+    ].filter(Boolean);
+    void navigator.clipboard.writeText(parts.join('\n'));
+  };
+
   render(): ReactNode {
     if (this.state.hasError && this.state.error) {
-      if (this.props.fallback) return this.props.fallback;
-
       const { error } = this.state;
       const message = error?.message ?? 'Unknown error';
       const stack = this.state.errorInfo?.componentStack ?? error?.stack ?? null;
+      const errorBlock = (
+        <Paper p="md" radius={0} withBorder style={{ borderLeft: 0, borderRight: 0, borderTop: 0, backgroundColor: 'var(--mantine-color-red-0)' }}>
+          <Stack gap="xs">
+            <Group justify="space-between">
+              <Text size="sm" fw={600} c="red">Error (copy to report)</Text>
+              <Button size="xs" variant="light" leftSection={<IconCopy size={14} />} onClick={this.handleCopyError}>
+                Copy error
+              </Button>
+            </Group>
+            <Code block style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, maxHeight: 200, overflow: 'auto' }}>
+              {[message, stack, this.state.errorInfo?.componentStack].filter(Boolean).join('\n\n')}
+            </Code>
+          </Stack>
+        </Paper>
+      );
+
+      if (this.props.fallback) {
+        return (
+          <Box style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-default)' }}>
+            {errorBlock}
+            {this.props.fallback}
+          </Box>
+        );
+      }
 
       return (
         <Box

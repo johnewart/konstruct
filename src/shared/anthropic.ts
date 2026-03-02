@@ -120,6 +120,7 @@ export async function chat(
     projectRoot?: string;
     providerId?: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }
 ): Promise<{
   content: string;
@@ -131,6 +132,7 @@ export async function chat(
 }> {
   const projectRoot = options?.projectRoot ?? '';
   const providerId = options?.providerId;
+  const sessionId = options?.sessionId;
   const { apiKey, model: defaultModel } = await getAnthropicEnvAsync(
     projectRoot,
     providerId
@@ -150,7 +152,18 @@ export async function chat(
     body.tools = anthropicToolDefs(options.tools);
   }
 
-  log.debug('chat request', 'model:', model, 'messages:', messages.length);
+  log.debug(
+    'chat request',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'url:',
+    ANTHROPIC_API_URL,
+    'model:',
+    model,
+    'messages:',
+    messages.length,
+    'body (truncated):',
+    JSON.stringify(body).slice(0, 400)
+  );
 
   const res = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
@@ -163,12 +176,23 @@ export async function chat(
     signal: options?.signal,
   });
 
+  const resText = await res.text();
+  log.debug(
+    'chat response status',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    res.status,
+    'body length:',
+    resText.length,
+    'preview:',
+    resText.slice(0, 300)
+  );
+
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${errText}`);
+    log.debug('chat response error body', ...(sessionId ? ['sessionId:', sessionId] : []), resText.slice(0, 1000));
+    throw new Error(`Anthropic API error ${res.status}: ${resText}`);
   }
 
-  const data = (await res.json()) as {
+  let data: {
     content?: Array<{
       type: string;
       text?: string;
@@ -177,6 +201,19 @@ export async function chat(
       input?: unknown;
     }>;
   };
+  try {
+    data = JSON.parse(resText) as typeof data;
+  } catch (parseErr) {
+    log.debug(
+      'chat response JSON parse failed',
+      ...(sessionId ? ['sessionId:', sessionId] : []),
+      parseErr,
+      'raw (truncated):',
+      resText.slice(0, 1000)
+    );
+    throw new Error(`Anthropic response was not valid JSON: ${String(parseErr)}`);
+  }
+
   const contentBlocks = data.content ?? [];
   let content = '';
   const toolCalls: Array<{
@@ -202,6 +239,15 @@ export async function chat(
     }
   }
 
-  log.debug('chat response', 'toolCalls:', toolCalls.length);
+  log.debug(
+    'chat response',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'content length:',
+    content.length,
+    'toolCalls:',
+    toolCalls.length,
+    'content preview:',
+    content.slice(0, 200)
+  );
   return { content, toolCalls: toolCalls.length ? toolCalls : undefined };
 }

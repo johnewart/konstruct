@@ -25,6 +25,7 @@ import {
 } from '../../shared/config';
 import type { ConfigProvider, ProviderModel } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
+import * as listProviderModels from '../services/listProviderModels';
 
 const log = createLogger('providerConfig');
 
@@ -54,6 +55,7 @@ const providerInputSchema = z.object({
   default_model: z.string().optional(),
   endpoint: z.string().optional(),
   aws_profile: z.string().optional(),
+  runpod_pod_id: z.string().optional(),
   models: z.array(providerModelSchema).optional(),
   max_tokens: z.number().optional(),
   temperature: z.number().optional(),
@@ -104,6 +106,7 @@ export const providerConfigRouter = router({
         default_model: input.provider.default_model?.trim(),
         endpoint: input.provider.endpoint?.trim(),
         aws_profile: input.provider.aws_profile?.trim(),
+        runpod_pod_id: input.provider.runpod_pod_id?.trim(),
         models: input.provider.models,
         max_tokens: input.provider.max_tokens,
         temperature: input.provider.temperature,
@@ -151,6 +154,7 @@ export const providerConfigRouter = router({
           default_model: input.provider.default_model !== undefined ? input.provider.default_model?.trim() : existing.default_model,
           endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
           aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
+          runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
           models: input.provider.models !== undefined ? input.provider.models : existing.models,
           max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
           temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,
@@ -175,6 +179,7 @@ export const providerConfigRouter = router({
           default_model: input.provider.default_model !== undefined ? input.provider.default_model?.trim() : existing.default_model,
           endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
           aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
+          runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
           models: input.provider.models !== undefined ? input.provider.models : existing.models,
           max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
           temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,
@@ -301,6 +306,25 @@ export const providerConfigRouter = router({
         saveProjectConfig(config, path);
         return updated;
       }
+    }),
+
+  /** Fetch available models from the provider API (OpenAI, Anthropic, Bedrock). Returns list to merge or replace in provider. */
+  refreshProviderModels: publicProcedure
+    .input(
+      z.object({
+        scope: scopeSchema,
+        providerId: z.string().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const projectRoot =
+        input.scope.type === 'project'
+          ? (getProjectPathById(input.scope.projectId) ?? '')
+          : ctx.projectRoot;
+      if (input.scope.type === 'project' && !projectRoot) {
+        throw new Error('Project not found or has no local path');
+      }
+      return listProviderModels.listProviderModels(projectRoot, input.providerId);
     }),
 
   removeModel: publicProcedure

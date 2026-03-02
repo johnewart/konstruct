@@ -19,7 +19,7 @@
  * .konstruct/config.yml overlay. Secrets via env vars or refs (env: or 1pass:).
  */
 
-import { loadConfig, getProviderById, resolveProviderSecret, saveConfig } from './config';
+import { loadConfig, loadGlobalConfig, loadProjectOnlyConfig, getProviderById, resolveProviderSecret, saveConfig } from './config';
 import type { ProviderModel } from './config';
 import { getDefaultPodId } from './runpodProject';
 
@@ -55,9 +55,9 @@ function isProviderConfiguredWithSecret(
   const c = loadConfig(projectRoot);
   const provider = getProviderById(c, providerId);
   if (provider?.secret_ref?.trim()) return true;
-  if (type === 'openai') return !!(getEnv('OPENAI_API_KEY') || c.llm?.api_key || getVastApiKey(projectRoot));
-  if (type === 'anthropic') return !!(getEnv('ANTHROPIC_API_KEY') || c.llm?.api_key);
-  if (type === 'runpod') return !!(getEnv('RUNPOD_API_KEY') || c.runpod?.api_key);
+  if (type === 'openai') return !!(getEnv('OPENAI_API_KEY') || getVastApiKey(projectRoot));
+  if (type === 'anthropic') return !!getEnv('ANTHROPIC_API_KEY');
+  if (type === 'runpod') return !!getEnv('RUNPOD_API_KEY');
   return false;
 }
 
@@ -74,7 +74,7 @@ export function getOpenAIEnv(projectRoot: string): {
     'https://api.openai.com/v1';
   let apiKey = getEnv('OPENAI_API_KEY') || (c.llm.api_key ?? '');
   if (!apiKey && getVastApiKey(projectRoot)) apiKey = 'vast';
-  const model = getEnv('OPENAI_MODEL') || (c.llm.model ?? '') || 'gpt-4o-mini';
+  const model = 'gpt-4o-mini';
   return { baseUrl, apiKey, model };
 }
 
@@ -87,7 +87,6 @@ export function getAnthropicEnv(projectRoot: string): {
   const apiKey = getEnv('ANTHROPIC_API_KEY') || (c.llm.api_key ?? '');
   const model =
     getEnv('ANTHROPIC_MODEL') ||
-    (c.llm.model ?? '') ||
     'claude-sonnet-4-20250514';
   return { apiKey, model };
 }
@@ -103,8 +102,6 @@ export function getBedrockEnv(
     getEnv('AWS_REGION') || getEnv('AWS_DEFAULT_REGION') || 'us-east-1';
   const model =
     provider?.default_model ||
-    getEnv('AWS_BEDROCK_MODEL') ||
-    (c.llm.model ?? '') ||
     'anthropic.claude-3-5-sonnet-v2:0';
   const aws_profile = provider?.aws_profile?.trim();
   return { region, model, ...(aws_profile ? { aws_profile } : {}) };
@@ -134,7 +131,9 @@ export function getOllamaEnv(projectRoot: string): {
     getEnv('OLLAMA_BASE_URL') ||
     (c.llm.base_url ?? '') ||
     'http://localhost:11434/v1';
-  const model = getEnv('OLLAMA_MODEL') || (c.llm.model ?? '') || 'llama3.2';
+  const model =
+    getEnv('OLLAMA_MODEL') ||
+    'llama3.2';
   return { baseUrl, model };
 }
 
@@ -147,7 +146,7 @@ export function getRunpodEnv(projectRoot: string): {
   const c = loadConfig(projectRoot);
   const defaultPodId = getDefaultPodId(projectRoot);
   const apiKey = getEnv('RUNPOD_API_KEY') || (c.runpod?.api_key ?? '');
-  const model = c.runpod?.model || c.llm?.model || '';
+  const model = c.runpod?.model ?? '';
   if (!defaultPodId) {
     return {
       baseUrl: '',
@@ -174,11 +173,7 @@ export async function getOpenAIEnvAsync(
       getEnv('OPENAI_BASE_URL') ??
       c.llm?.base_url ??
       'https://api.openai.com/v1';
-    const model =
-      provider?.default_model ??
-      getEnv('OPENAI_MODEL') ??
-      c.llm?.model ??
-      'gpt-4o-mini';
+    const model = provider?.default_model ?? 'gpt-4o-mini';
     return { baseUrl, apiKey: resolved, model };
   }
   return getOpenAIEnv(projectRoot);
@@ -197,20 +192,27 @@ export async function getAnthropicEnvAsync(
     const model =
       provider?.default_model ??
       getEnv('ANTHROPIC_MODEL') ??
-      c.llm?.model ??
       'claude-sonnet-4-20250514';
     return { apiKey: resolved, model };
   }
   return getAnthropicEnv(projectRoot);
 }
 
-/** Async: prefer provider secret_ref, then fall back to sync getRunpodEnv. */
+/** Async: when provider has runpod_pod_id use its URL; else use default pod + secret. */
 export async function getRunpodEnvAsync(
   projectRoot: string,
   providerId?: string
 ): Promise<{ baseUrl: string; apiKey: string; model: string }> {
   const c = loadConfig(projectRoot);
   const id = (providerId ?? c.llm?.provider ?? 'runpod').toLowerCase();
+  const provider = getProviderById(c, id);
+  const podId = provider?.runpod_pod_id?.trim();
+  if (podId) {
+    const baseUrl = `https://${podId}-${RUNPOD_PROXY_PORT}.proxy.runpod.net/v1`;
+    const apiKey = (await resolveProviderSecret(projectRoot, id)) ?? getEnv('RUNPOD_API_KEY') ?? (c.runpod?.api_key ?? '');
+    const model = provider?.default_model ?? c.runpod?.model ?? 'default';
+    return { baseUrl, apiKey, model };
+  }
   const resolved = await resolveProviderSecret(projectRoot, id);
   const sync = getRunpodEnv(projectRoot);
   if (resolved != null) {
@@ -228,12 +230,22 @@ export type ProviderListItem = {
   url?: string;
 };
 
-/** Returns all provider options for the UI (built-in + custom) plus default provider from config. */
+/** Returns provider options for the current context: built-in + global custom + (when projectRoot set) project custom. */
 export function getAllProviders(projectRoot: string): {
   providers: ProviderListItem[];
   defaultProviderId: string;
 } {
   const c = loadConfig(projectRoot);
+  const globalConfig = loadGlobalConfig();
+  const projectConfig = projectRoot ? loadProjectOnlyConfig(projectRoot) : null;
+  const globalProviders = globalConfig.providers ?? [];
+  const projectProviders = projectConfig?.providers ?? [];
+  const customProviderList = [...globalProviders];
+  for (const p of projectProviders) {
+    const i = customProviderList.findIndex((x) => (x.id ?? '').toLowerCase() === (p.id ?? '').toLowerCase());
+    if (i >= 0) customProviderList[i] = p;
+    else customProviderList.push(p);
+  }
   const openaiEnv = getOpenAIEnv(projectRoot);
   const anthropicEnv = getAnthropicEnv(projectRoot);
   const runpodEnv = getRunpodEnv(projectRoot);
@@ -245,7 +257,12 @@ export function getAllProviders(projectRoot: string): {
       name: 'OpenAI / Vast',
       defaultModel: openaiEnv.model,
       models: [],
-      configured: !!openaiEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'openai', 'openai'),
+      configured:
+        !!getEnv('OPENAI_API_KEY') ||
+        !!getVastApiKey(projectRoot) ||
+        !!getProviderById(c, 'openai')?.secret_ref?.trim() ||
+        !!getEnv('OPENAI_BASE_URL') ||
+        !!(c.llm?.base_url?.trim()),
       url: openaiEnv.baseUrl || undefined,
     },
     {
@@ -261,7 +278,9 @@ export function getAllProviders(projectRoot: string): {
       name: 'RunPod',
       defaultModel: runpodEnv.model || 'default',
       models: [],
-      configured: !!runpodEnv.baseUrl || isProviderConfiguredWithSecret(projectRoot, 'runpod', 'runpod'),
+      configured:
+        !!runpodEnv.baseUrl ||
+        !!getProviderById(c, 'runpod')?.runpod_pod_id?.trim(),
       url: runpodEnv.baseUrl || undefined,
     },
     {
@@ -269,7 +288,9 @@ export function getAllProviders(projectRoot: string): {
       name: 'Anthropic',
       defaultModel: anthropicEnv.model,
       models: [],
-      configured: !!anthropicEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'anthropic', 'anthropic'),
+      configured:
+        !!getEnv('ANTHROPIC_API_KEY') ||
+        !!getProviderById(c, 'anthropic')?.secret_ref?.trim(),
     },
     {
       id: 'bedrock',
@@ -279,20 +300,23 @@ export function getAllProviders(projectRoot: string): {
       configured: isBedrockConfigured(projectRoot),
     },
   ];
-  const customProviders: ProviderListItem[] = (c.providers ?? []).map((p) => {
+  const customProviders: ProviderListItem[] = customProviderList.map((p) => {
     const type = (p.type ?? '').toLowerCase();
     let configured = false;
     let url: string | undefined;
     if (type === 'openai') {
-      configured = !!p.secret_ref?.trim();
+      configured = !!p.secret_ref?.trim() || !!p.base_url?.trim();
       url = p.base_url ?? undefined;
     } else if (type === 'anthropic') {
       configured = !!p.secret_ref?.trim();
     } else if (type === 'bedrock') {
       configured = !!p.aws_profile?.trim() || isBedrockConfigured(projectRoot, p.id);
     } else if (type === 'runpod') {
-      configured = !!p.secret_ref?.trim() || !!runpodEnv.baseUrl;
-      url = runpodEnv.baseUrl || undefined;
+      const podId = (p as { runpod_pod_id?: string }).runpod_pod_id?.trim();
+      configured = !!podId || !!p.secret_ref?.trim() || !!runpodEnv.baseUrl;
+      url = podId
+        ? `https://${podId}-8000.proxy.runpod.net/v1`
+        : runpodEnv.baseUrl || undefined;
     } else if (type === 'ollama') {
       configured = !!ollamaEnv.baseUrl;
       url = ollamaEnv.baseUrl || undefined;

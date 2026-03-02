@@ -47,6 +47,19 @@ function getUrl(baseURL: string, segment: string): string {
   return `${base}${p}`;
 }
 
+type OpenAIChatResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
+};
+
 export async function chat(
   messages: ChatMessage[],
   options?: {
@@ -55,6 +68,7 @@ export async function chat(
     providerId?: string;
     projectRoot?: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }
 ): Promise<{
   content: string;
@@ -74,6 +88,7 @@ export async function chat(
       projectRoot,
       providerId,
       signal: options?.signal,
+      sessionId: options?.sessionId,
     });
   }
   if (providerId === 'bedrock') {
@@ -83,6 +98,7 @@ export async function chat(
       projectRoot,
       providerId,
       signal: options?.signal,
+      sessionId: options?.sessionId,
     });
   }
 
@@ -129,51 +145,95 @@ export async function chat(
     body.tool_choice = 'auto';
   }
 
+  const requestUrl = getUrl(baseUrl, '/chat/completions');
+  const sessionId = options?.sessionId;
   log.debug(
     'chat request',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'url:',
+    requestUrl,
     'provider:',
     providerId,
     'model:',
     model,
     'messages:',
-    messages.length
+    messages.length,
+    'body (truncated):',
+    JSON.stringify(body).slice(0, 500)
   );
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const res = await fetch(getUrl(baseUrl, '/chat/completions'), {
+  const res = await fetch(requestUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
     signal: options?.signal,
   });
 
+  const resText = await res.text();
+  log.debug(
+    'chat response status',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    res.status,
+    'body length:',
+    resText.length,
+    'preview:',
+    resText.slice(0, 400)
+  );
+
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`LLM request failed: ${res.status} ${errText}`);
+    log.debug('chat response error body', ...(sessionId ? ['sessionId:', sessionId] : []), resText.slice(0, 1000));
+    throw new Error(`LLM request failed: ${res.status} ${resText}`);
   }
 
-  const data = (await res.json()) as {
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-        tool_calls?: Array<{
-          id: string;
-          type: string;
-          function: { name: string; arguments: string };
-        }>;
-      };
-    }>;
-  };
+  let data: OpenAIChatResponse;
+  try {
+    data = JSON.parse(resText) as OpenAIChatResponse;
+  } catch (parseErr) {
+    log.debug(
+      'chat response JSON parse failed',
+      ...(sessionId ? ['sessionId:', sessionId] : []),
+      parseErr,
+      'raw (truncated):',
+      resText.slice(0, 1500)
+    );
+    throw new Error(`LLM response was not valid JSON: ${String(parseErr)}`);
+  }
+
+  log.debug(
+    'chat response parsed',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'choices length:',
+    data.choices?.length ?? 0,
+    'top-level keys:',
+    Object.keys(data)
+  );
 
   const choice = data.choices?.[0];
   const msg = choice?.message;
-  if (!msg) throw new Error('No message in LLM response');
+  if (!msg) {
+    log.debug(
+      'chat response missing message',
+      ...(sessionId ? ['sessionId:', sessionId] : []),
+      'choice:',
+      choice,
+      'data:',
+      JSON.stringify(data).slice(0, 800)
+    );
+    throw new Error('No message in LLM response');
+  }
 
   const tcCount = msg.tool_calls?.length ?? 0;
+  const contentPreview = typeof msg.content === 'string' ? msg.content.slice(0, 200) : String(msg.content);
   log.debug(
     'chat response',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'content length:',
+    typeof msg.content === 'string' ? msg.content.length : 0,
+    'content preview:',
+    contentPreview,
     'toolCalls:',
     tcCount,
     tcCount ? msg.tool_calls!.map((tc) => tc.function.name).join(', ') : ''

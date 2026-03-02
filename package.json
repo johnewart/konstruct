@@ -26,6 +26,7 @@
     "prebuild": "npm run lint:fix && npm run format && npm run test:ci"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock": "^3.997.0",
     "@aws-sdk/client-bedrock-runtime": "^3.997.0",
     "@aws-sdk/credential-providers": "^3.997.0",
     "@elysiajs/trpc": "^1.1.0",

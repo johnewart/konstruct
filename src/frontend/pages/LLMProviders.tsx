@@ -30,8 +30,9 @@ import {
   Select,
   NumberInput,
   Divider,
+  Alert,
 } from '@mantine/core';
-import { IconPlus, IconPencil, IconTrash } from '@tabler/icons-react';
+import { IconPlus, IconPencil, IconTrash, IconRefresh } from '@tabler/icons-react';
 
 const PROVIDER_TYPES = [
   { value: 'openai', label: 'OpenAI / Vast' },
@@ -54,6 +55,7 @@ type FormState = {
   default_model: string;
   endpoint: string;
   aws_profile: string;
+  runpod_pod_id: string;
 };
 
 const emptyForm: FormState = {
@@ -65,6 +67,7 @@ const emptyForm: FormState = {
   default_model: '',
   endpoint: '',
   aws_profile: '',
+  runpod_pod_id: '',
 };
 
 export function LLMProvidersPage() {
@@ -79,6 +82,7 @@ export function LLMProvidersPage() {
     default_model: string;
     endpoint: string;
     aws_profile: string;
+    runpod_pod_id: string;
     models: ProviderModel[];
   } | null>(null);
   const [removeScope, setRemoveScope] = useState<Scope | null>(null);
@@ -139,7 +143,20 @@ export function LLMProvidersPage() {
       setRemoveModelId(null);
     },
   });
+  const refreshModelsMutation = trpc.providerConfig.refreshProviderModels.useMutation({
+    onSuccess: (res, variables) => {
+      if (res.error) return;
+      setEditing((e) => (e ? { ...e, models: res.models } : null));
+      utils.providerConfig.list.invalidate();
+      updateMutation.mutate({
+        scope: variables.scope,
+        id: variables.providerId,
+        provider: { models: res.models },
+      });
+    },
+  });
   const [removeModelId, setRemoveModelId] = useState<string | null>(null);
+  const [refreshModelsError, setRefreshModelsError] = useState<string | null>(null);
 
   const openAdd = (scope: Scope) => {
     setEditing(null);
@@ -147,10 +164,20 @@ export function LLMProvidersPage() {
     setFormOpen(true);
   };
 
+  const isRunpodForm = formOpen && ((editing?.type ?? form.type) === 'runpod');
+  const { data: runpodPodsData, isLoading: runpodPodsLoading, error: runpodPodsError } = trpc.runpod.listPodsForProvider.useQuery(
+    undefined,
+    { enabled: isRunpodForm }
+  );
+  const runpodPods = runpodPodsData?.success && runpodPodsData.pods
+    ? runpodPodsData.pods.map((p) => ({ id: p.id, name: p.name || p.id, status: p.status ?? '' }))
+    : [];
+
   const openEdit = (
     scope: Scope,
-    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string; aws_profile?: string; models?: ProviderModel[] }
+    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string; aws_profile?: string; runpod_pod_id?: string; models?: ProviderModel[] }
   ) => {
+    setRefreshModelsError(null);
     setEditing({
       scope,
       id: p.id,
@@ -161,6 +188,7 @@ export function LLMProvidersPage() {
       default_model: p.default_model ?? '',
       endpoint: p.endpoint ?? '',
       aws_profile: p.aws_profile ?? '',
+      runpod_pod_id: p.runpod_pod_id ?? '',
       models: p.models ?? [],
     });
     setFormOpen(true);
@@ -179,6 +207,8 @@ export function LLMProvidersPage() {
           default_model: editing.default_model.trim() || undefined,
           endpoint: editing.endpoint.trim() || undefined,
           aws_profile: editing.aws_profile.trim() || undefined,
+          runpod_pod_id: editing.runpod_pod_id.trim() || undefined,
+          models: editing.models ?? [],
         },
       });
     } else {
@@ -192,6 +222,7 @@ export function LLMProvidersPage() {
           default_model: form.default_model.trim() || undefined,
           endpoint: form.endpoint.trim() || undefined,
           aws_profile: form.aws_profile.trim() || undefined,
+          runpod_pod_id: form.runpod_pod_id.trim() || undefined,
         },
       });
     }
@@ -280,7 +311,7 @@ export function LLMProvidersPage() {
                     <Table.Tr key={p.id}>
                       <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
+                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
@@ -337,7 +368,7 @@ export function LLMProvidersPage() {
                       <Table.Tr key={p.id}>
                         <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
+                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
@@ -408,7 +439,7 @@ export function LLMProvidersPage() {
               onChange={(e) => (editing ? setEditing((x) => x && { ...x, aws_profile: e.target.value }) : setForm((f) => ({ ...f, aws_profile: e.target.value })))}
             />
           ))}
-          {(['openai', 'anthropic', 'runpod'].includes(editing?.type ?? form.type) && (
+          {(['openai', 'anthropic'].includes(editing?.type ?? form.type) && (
             <TextInput
               label="Secret ref (env:VAR or 1pass:op://...)"
               placeholder={editing?.type === 'anthropic' || form.type === 'anthropic' ? 'env:ANTHROPIC_API_KEY' : 'env:OPENAI_API_KEY'}
@@ -416,7 +447,7 @@ export function LLMProvidersPage() {
               onChange={(e) => (editing ? setEditing((x) => x && { ...x, secret_ref: e.target.value }) : setForm((f) => ({ ...f, secret_ref: e.target.value })))}
             />
           ))}
-          {(['openai', 'runpod', 'ollama'].includes(editing?.type ?? form.type) && (
+          {(['openai', 'ollama'].includes(editing?.type ?? form.type) && (
             <TextInput
               label="Base URL"
               placeholder="https://api.openai.com/v1"
@@ -425,12 +456,45 @@ export function LLMProvidersPage() {
             />
           ))}
           {(editing?.type ?? form.type) === 'runpod' && (
-            <TextInput
-              label="Endpoint (e.g. RunPod GraphQL URL)"
-              placeholder="https://api.runpod.io/graphql"
-              value={editing ? editing.endpoint : form.endpoint}
-              onChange={(e) => (editing ? setEditing((x) => x && { ...x, endpoint: e.target.value }) : setForm((f) => ({ ...f, endpoint: e.target.value })))}
-            />
+            <Stack gap="xs">
+              <Text size="sm" fw={500}>Select a RunPod pod</Text>
+              {runpodPodsLoading && <Text size="sm" c="dimmed">Loading pods…</Text>}
+              {runpodPodsError && (
+                <Alert color="red" title="Could not load pods">
+                  {runpodPodsError.message}
+                </Alert>
+              )}
+              {!runpodPodsLoading && runpodPodsData?.error && (
+                <Alert color="yellow" title="RunPod not configured">
+                  {runpodPodsData.error}
+                </Alert>
+              )}
+              {(runpodPods.length > 0 || (editing ? editing.runpod_pod_id : form.runpod_pod_id)) && !runpodPodsData?.error && (
+                <Select
+                  label="Pod"
+                  placeholder="Choose a pod"
+                  value={editing ? editing.runpod_pod_id : form.runpod_pod_id}
+                  onChange={(v) => {
+                    const id = v ?? '';
+                    if (editing) setEditing((x) => x ? { ...x, runpod_pod_id: id } : null);
+                    else setForm((f) => ({ ...f, runpod_pod_id: id }));
+                  }}
+                  data={[
+                    ...(runpodPods.length > 0
+                      ? runpodPods.map((p) => ({ value: p.id, label: `${p.name || p.id} (${p.status})` }))
+                      : []),
+                    ...((editing ? editing.runpod_pod_id : form.runpod_pod_id) && !runpodPods.some((p) => p.id === (editing ? editing.runpod_pod_id : form.runpod_pod_id))
+                      ? [{ value: editing ? editing.runpod_pod_id : form.runpod_pod_id, label: `${editing ? editing.runpod_pod_id : form.runpod_pod_id} (saved)` }]
+                      : []),
+                  ]}
+                />
+              )}
+              {(editing ? editing.runpod_pod_id : form.runpod_pod_id) && (
+                <Text size="xs" c="dimmed">
+                  URL: https://{(editing ? editing.runpod_pod_id : form.runpod_pod_id)}-8000.proxy.runpod.net/v1
+                </Text>
+              )}
+            </Stack>
           )}
           <TextInput
             label="Default model (optional)"
@@ -441,11 +505,39 @@ export function LLMProvidersPage() {
           {editing && (
             <>
               <Divider label="Models" labelPosition="left" />
+              {refreshModelsError && (
+                <Alert color="red" title="Refresh failed" onClose={() => setRefreshModelsError(null)} withCloseButton>
+                  {refreshModelsError}
+                </Alert>
+              )}
               <Group justify="space-between">
                 <Text size="sm" c="dimmed">Model name and context window (for max_tokens)</Text>
-                <Button variant="light" size="xs" leftSection={<IconPlus size={14} />} onClick={openAddModel}>
-                  Add model
-                </Button>
+                <Group gap="xs">
+                  {['openai', 'anthropic', 'bedrock', 'runpod'].includes(editing.type) && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconRefresh size={14} />}
+                      loading={refreshModelsMutation.isPending}
+                      onClick={() => {
+                        setRefreshModelsError(null);
+                        refreshModelsMutation.mutate(
+                          { scope: editing.scope, providerId: editing.id },
+                          {
+                            onSuccess: (res) => {
+                              if (res.error) setRefreshModelsError(res.error);
+                            },
+                          }
+                        );
+                      }}
+                    >
+                      Refresh from API
+                    </Button>
+                  )}
+                  <Button variant="light" size="xs" leftSection={<IconPlus size={14} />} onClick={openAddModel}>
+                    Add model
+                  </Button>
+                </Group>
               </Group>
               {editing.models.length === 0 ? (
                 <Text size="sm" c="dimmed">No models. Add one to set context window per model.</Text>
@@ -485,7 +577,10 @@ export function LLMProvidersPage() {
             <Button
               onClick={submitForm}
               loading={addMutation.isPending || updateMutation.isPending}
-              disabled={editing ? !editing.name.trim() : !form.name.trim()}
+              disabled={
+                (editing ? !editing.name.trim() : !form.name.trim()) ||
+                ((editing?.type ?? form.type) === 'runpod' && !(editing ? editing.runpod_pod_id : form.runpod_pod_id)?.trim())
+              }
             >
               {editing ? 'Save' : 'Add'}
             </Button>

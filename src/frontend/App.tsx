@@ -30,7 +30,6 @@ import {
   Box,
   Group,
   Select,
-  Text,
 } from '@mantine/core';
 import { useMantineColorScheme, useComputedColorScheme } from '@mantine/core';
 import { IconSun, IconMoon } from '@tabler/icons-react';
@@ -40,9 +39,6 @@ import { ConfigurationPage } from './pages/Configuration';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
 import './index.css';
-
-const RUNPOD_CONFIG_KEY = 'runpod-config';
-const CHAT_PROVIDER_KEY = 'chat-provider-id';
 
 function ThemeToggle() {
   const { toggleColorScheme } = useMantineColorScheme();
@@ -60,56 +56,6 @@ function ThemeToggle() {
         {computed === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
       </ActionIcon>
     </Tooltip>
-  );
-}
-
-function TopNavProviderSelector() {
-  const [providerId, setProviderId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem(CHAT_PROVIDER_KEY);
-  });
-
-  const { data: providersData } = trpc.chat.listProviders.useQuery();
-  const providers = providersData?.providers ?? [];
-  const defaultProviderId = providersData?.defaultProviderId ?? 'openai';
-
-  // Sync with localStorage when providers change
-  useEffect(() => {
-    if (providers.length === 0) return;
-    const inList = providerId != null && providers.some((p) => p.id === providerId);
-    if (inList) return;
-    const next =
-      defaultProviderId && providers.some((p) => p.id === defaultProviderId)
-        ? defaultProviderId
-        : providers[0].id;
-    setProviderId(next);
-    if (typeof window !== 'undefined')
-      localStorage.setItem(CHAT_PROVIDER_KEY, next);
-  }, [providers, defaultProviderId]);
-
-  const handleProviderChange = (value: string | null) => {
-    setProviderId(value);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(CHAT_PROVIDER_KEY, value ?? '');
-    }
-  };
-
-  if (providers.length === 0) return null;
-
-  return (
-    <Select
-      value={providerId ?? ''}
-      onChange={(value) => handleProviderChange(value)}
-      data={providers.map((p) => ({ value: p.id, label: p.name }))}
-      size="xs"
-      w={160}
-      styles={{
-        input: {
-          fontSize: '0.8em',
-          fontWeight: 500,
-        },
-      }}
-    />
   );
 }
 
@@ -208,7 +154,6 @@ function TopNav() {
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
-        <TopNavProviderSelector />
         <ThemeToggle />
       </Group>
     </Group>

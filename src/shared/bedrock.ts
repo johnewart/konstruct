@@ -149,6 +149,7 @@ export async function chat(
     projectRoot?: string;
     providerId?: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }
 ): Promise<{
   content: string;
@@ -160,6 +161,7 @@ export async function chat(
 }> {
   const projectRoot = options?.projectRoot ?? '';
   const providerId = options?.providerId;
+  const sessionId = options?.sessionId;
   const { region, model: defaultModel, aws_profile } = getBedrockEnv(projectRoot, providerId);
   const model = options?.model ?? defaultModel;
   const maxTokens =
@@ -182,7 +184,16 @@ export async function chat(
     ? toolsToBedrock(options.tools)
     : undefined;
 
-  log.debug('chat request', 'model:', model, 'messages:', messages.length);
+  log.debug(
+    'chat request',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'model:',
+    model,
+    'messages:',
+    messages.length,
+    'region:',
+    region
+  );
   const response = await client.send(
     new ConverseCommand({
       modelId: model,
@@ -199,7 +210,21 @@ export async function chat(
   );
 
   const output = response.output;
+  log.debug(
+    'chat response',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'has output:',
+    !!output,
+    'output keys:',
+    output ? Object.keys(output) : []
+  );
   if (!output || !('message' in output)) {
+    log.debug(
+      'chat response missing message',
+      ...(sessionId ? ['sessionId:', sessionId] : []),
+      'output:',
+      JSON.stringify(output).slice(0, 500)
+    );
     throw new Error('Bedrock: no message in response');
   }
   const outMessage = output.message;
@@ -229,7 +254,16 @@ export async function chat(
     }
   }
 
-  log.debug('chat response', 'toolCalls:', toolCalls.length);
+  log.debug(
+    'chat response',
+    ...(sessionId ? ['sessionId:', sessionId] : []),
+    'content length:',
+    content.length,
+    'toolCalls:',
+    toolCalls.length,
+    'content preview:',
+    content.slice(0, 200)
+  );
   return {
     content,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,

@@ -16,7 +16,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getGlobalConfigDir, getProjectIdForRoot } from './config';
+import {
+  getGlobalConfigDir,
+  getProjectIdForRoot,
+  getActiveProjectRoot,
+  getActiveProjectId,
+} from './config';
 import { createLogger } from './logger';
 
 const log = createLogger('sessionStore');
@@ -48,53 +53,35 @@ export interface Session {
 }
 
 /**
- * Project root for the current run. Used to resolve which project's session
- * dir to use under ~/.config/konstruct/projects/<project-id>/.
+ * Resolve project id from a project root path (for organizing session files).
+ * Uses active project id when root matches, else path lookup.
  */
-let projectRootForRun: string | null = null;
-let lastLoadedProjectId: string | null = null;
-
-/**
- * Set the project root for the current run (e.g. active project path).
- * Call at the start of each request/run so sessions load/save under that project's dir.
- * Loads that project's sessions from disk when switching to a different project.
- */
-export function setProjectRootForRun(root: string | null): void {
-  projectRootForRun = root;
-  const id = getCurrentProjectId();
-  if (id !== lastLoadedProjectId) {
-    lastLoadedProjectId = id;
-    loadSessions();
+export function resolveProjectId(projectRoot: string): string {
+  const root = projectRoot?.trim() || '';
+  if (root) {
+    const activeRoot = getActiveProjectRoot();
+    if (
+      activeRoot &&
+      path.resolve(root) === path.resolve(activeRoot)
+    ) {
+      const activeId = getActiveProjectId();
+      if (activeId) return activeId;
+    }
   }
+  return getProjectIdForRoot(root) ?? '_default';
 }
 
-/** Project id used for session storage (known project id or '_default'). */
-function getCurrentProjectId(): string {
-  const id = getProjectIdForRoot(projectRootForRun ?? '');
-  return id ?? '_default';
-}
+/** Global map: session ID -> { session, projectId }. Session ID is GUID, never collides. */
+const sessionById = new Map<string, { session: Session; projectId: string }>();
 
-/** Sessions path: ~/.config/konstruct/projects/<project-id>/sessions.json */
-function getSessionsPath(): string {
+function getSessionFilePathForProject(sessionId: string, projectId: string): string {
   return path.join(
     getGlobalConfigDir(),
     'projects',
-    getCurrentProjectId(),
-    'sessions.json'
+    projectId,
+    'sessions',
+    `${sessionId}.json`
   );
-}
-
-/** Per-project in-memory session cache. */
-const sessionsByProjectId = new Map<string, Map<string, Session>>();
-
-function getCurrentSessionsMap(): Map<string, Session> {
-  const id = getCurrentProjectId();
-  let map = sessionsByProjectId.get(id);
-  if (!map) {
-    map = new Map();
-    sessionsByProjectId.set(id, map);
-  }
-  return map;
 }
 
 /** Session shape for JSON (dates as ISO strings). */
@@ -103,80 +90,150 @@ type SessionSerialized = Omit<Session, 'createdAt' | 'updatedAt'> & {
   updatedAt: string;
 };
 
+function toValidDate(value: unknown): Date {
+  const d = value instanceof Date ? value : new Date(value as string | number);
+  return Number.isFinite(d.getTime()) ? d : new Date();
+}
+
 function serialize(s: Session): SessionSerialized {
   return {
     ...s,
-    createdAt: s.createdAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
+    createdAt: toValidDate(s.createdAt).toISOString(),
+    updatedAt: toValidDate(s.updatedAt).toISOString(),
   };
 }
 
 function deserialize(raw: SessionSerialized): Session {
   return {
     ...raw,
-    createdAt: new Date(raw.createdAt),
-    updatedAt: new Date(raw.updatedAt),
+    createdAt: toValidDate(raw.createdAt),
+    updatedAt: toValidDate(raw.updatedAt),
   };
 }
 
-function loadSessions(): void {
-  const filePath = getSessionsPath();
-  const map = getCurrentSessionsMap();
-  try {
-    if (!fs.existsSync(filePath)) return;
-    const data = fs.readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(data) as SessionSerialized[];
-    if (!Array.isArray(parsed)) return;
-    map.clear();
-    for (const raw of parsed) {
-      if (raw?.id) {
-        try {
-          map.set(raw.id, deserialize(raw));
-        } catch {
-          // skip malformed entry
-        }
-      }
-    }
-    log.debug('loadSessions', getCurrentProjectId(), map.size, 'sessions');
-  } catch (err) {
-    log.warn('loadSessions failed', err);
-  }
-}
-
-function saveSessions(): void {
-  const filePath = getSessionsPath();
-  const map = getCurrentSessionsMap();
+function saveSessionToProject(session: Session, projectId: string): void {
+  const filePath = getSessionFilePathForProject(session.id, projectId);
   try {
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true });
-    const array = Array.from(map.values()).map(serialize);
-    fs.writeFileSync(filePath, JSON.stringify(array, null, 2), 'utf-8');
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify(serialize(session), null, 2),
+      'utf-8'
+    );
   } catch (err) {
-    log.warn('saveSessions failed', err);
+    log.warn('saveSession failed', session.id, projectId, err);
   }
 }
 
-// Load from disk on module init
-loadSessions();
-
-const RELOAD_THROTTLE_MS = 1500;
-let lastReloadTime = 0;
-
-/** Reload sessions from disk. Throttled so repeated get/list calls (e.g. polling) don't hammer the disk. */
-export function reloadSessions(): void {
-  const now = Date.now();
-  if (now - lastReloadTime < RELOAD_THROTTLE_MS) return;
-  lastReloadTime = now;
-  loadSessions();
+/** Migrate legacy sessions.json in a project dir to one file per session. */
+function migrateLegacyInProject(projectId: string): void {
+  const legacyPath = path.join(
+    getGlobalConfigDir(),
+    'projects',
+    projectId,
+    'sessions.json'
+  );
+  if (!fs.existsSync(legacyPath)) return;
+  try {
+    const data = fs.readFileSync(legacyPath, 'utf-8');
+    const parsed = JSON.parse(data) as SessionSerialized[];
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      fs.unlinkSync(legacyPath);
+      return;
+    }
+    const dir = path.join(getGlobalConfigDir(), 'projects', projectId, 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const raw of parsed) {
+      if (raw?.id) {
+        try {
+          const filePath = path.join(dir, `${raw.id}.json`);
+          fs.writeFileSync(filePath, JSON.stringify(raw, null, 2), 'utf-8');
+        } catch {
+          // skip
+        }
+      }
+    }
+    fs.unlinkSync(legacyPath);
+    log.info('migrated legacy sessions.json to one file per session', projectId, parsed.length);
+  } catch (err) {
+    log.warn('migrateLegacyInProject failed', projectId, err);
+  }
 }
 
-/** Reload from disk without throttle. Use when we must see the latest (e.g. after agent run completes). */
-export function forceReloadSessions(): void {
-  lastReloadTime = Date.now();
-  loadSessions();
+/** Load one session from disk into the map. Returns session or undefined. */
+function loadSessionFromDisk(sessionId: string, projectId: string): Session | undefined {
+  migrateLegacyInProject(projectId);
+  const filePath = getSessionFilePathForProject(sessionId, projectId);
+  if (!fs.existsSync(filePath)) return undefined;
+  try {
+    const data = fs.readFileSync(filePath, 'utf-8');
+    const raw = JSON.parse(data) as SessionSerialized;
+    if (!raw?.id) return undefined;
+    const session = deserialize(raw);
+    sessionById.set(sessionId, { session, projectId });
+    return session;
+  } catch {
+    return undefined;
+  }
 }
 
-export function createSession(title: string): Session {
+/**
+ * Get session by ID. If not in map and projectId is provided, try loading from that project's dir.
+ */
+export function getSession(
+  id: string,
+  projectId?: string
+): Session | undefined {
+  let entry = sessionById.get(id);
+  if (!entry && projectId) {
+    const session = loadSessionFromDisk(id, projectId);
+    if (session) {
+      if (!Array.isArray(session.todos)) session.todos = [];
+      return session;
+    }
+  }
+  if (!entry) return undefined;
+  const session = entry.session;
+  if (session && !Array.isArray(session.todos)) session.todos = [];
+  return session;
+}
+
+/**
+ * List sessions for a project (loads from disk and merges into map). Project ID is for organization only.
+ */
+export function listSessions(projectId: string): Session[] {
+  migrateLegacyInProject(projectId);
+  const dir = path.join(getGlobalConfigDir(), 'projects', projectId, 'sessions');
+  const out: Session[] = [];
+  try {
+    if (!fs.existsSync(dir)) return [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith('.json')) continue;
+      const id = e.name.slice(0, -5);
+      const filePath = path.join(dir, e.name);
+      try {
+        const data = fs.readFileSync(filePath, 'utf-8');
+        const raw = JSON.parse(data) as SessionSerialized;
+        if (raw?.id) {
+          const session = deserialize(raw);
+          sessionById.set(id, { session, projectId });
+          out.push(session);
+        }
+      } catch {
+        // skip
+      }
+    }
+    out.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    log.debug('listSessions', projectId, out.length);
+  } catch (err) {
+    log.warn('listSessions failed', projectId, err);
+  }
+  return out;
+}
+
+export function createSession(title: string, projectId: string): Session {
   const id = crypto.randomUUID();
   const now = new Date();
   const session: Session = {
@@ -187,57 +244,54 @@ export function createSession(title: string): Session {
     messages: [],
     todos: [],
   };
-  getCurrentSessionsMap().set(id, session);
-  log.info('createSession', id, session.title);
-  saveSessions();
+  sessionById.set(id, { session, projectId });
+  log.info('createSession', id, session.title, projectId);
+  saveSessionToProject(session, projectId);
   return session;
-}
-
-export function getSession(id: string): Session | undefined {
-  const session = getCurrentSessionsMap().get(id);
-  if (session && !Array.isArray(session.todos)) session.todos = [];
-  return session;
-}
-
-export function listSessions(): Session[] {
-  return Array.from(getCurrentSessionsMap().values()).sort(
-    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
-  );
 }
 
 export function updateSessionMessages(
   id: string,
   messages: ChatMessage[]
 ): Session | undefined {
-  const session = getCurrentSessionsMap().get(id);
-  if (!session) return undefined;
-  session.messages = messages;
-  session.updatedAt = new Date();
+  const entry = sessionById.get(id);
+  if (!entry) return undefined;
+  entry.session.messages = messages;
+  entry.session.updatedAt = new Date();
   log.debug('updateSessionMessages', id, 'messages:', messages.length);
-  saveSessions();
-  return session;
+  saveSessionToProject(entry.session, entry.projectId);
+  return entry.session;
 }
 
 export function updateSessionTitle(
   id: string,
   title: string
 ): Session | undefined {
-  const session = getCurrentSessionsMap().get(id);
-  if (!session) return undefined;
-  session.title = title.trim() || 'Chat';
-  session.updatedAt = new Date();
-  saveSessions();
-  return session;
+  const entry = sessionById.get(id);
+  if (!entry) return undefined;
+  entry.session.title = title.trim() || 'Chat';
+  entry.session.updatedAt = new Date();
+  saveSessionToProject(entry.session, entry.projectId);
+  return entry.session;
 }
 
 export function deleteSession(id: string): boolean {
-  const ok = getCurrentSessionsMap().delete(id);
-  if (ok) saveSessions();
+  const entry = sessionById.get(id);
+  const ok = sessionById.delete(id);
+  if (ok && entry) {
+    try {
+      const filePath = getSessionFilePathForProject(id, entry.projectId);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (err) {
+      log.warn('deleteSession: failed to remove file', id, err);
+    }
+  }
   return ok;
 }
 
 export function listTodos(sessionId: string): TodoItem[] {
-  const session = getCurrentSessionsMap().get(sessionId);
+  const entry = sessionById.get(sessionId);
+  const session = entry?.session;
   if (!session?.todos) return [];
   return session.todos;
 }
@@ -246,8 +300,9 @@ export function addTodo(
   sessionId: string,
   description: string
 ): TodoItem | undefined {
-  const session = getCurrentSessionsMap().get(sessionId);
-  if (!session) return undefined;
+  const entry = sessionById.get(sessionId);
+  if (!entry) return undefined;
+  const session = entry.session;
   if (!session.todos) session.todos = [];
   const item: TodoItem = {
     id: crypto.randomUUID(),
@@ -256,7 +311,7 @@ export function addTodo(
   };
   session.todos.push(item);
   session.updatedAt = new Date();
-  saveSessions();
+  saveSessionToProject(session, entry.projectId);
   return item;
 }
 
@@ -265,23 +320,34 @@ export function updateTodo(
   todoId: string,
   status: TodoItem['status']
 ): boolean {
-  const session = getCurrentSessionsMap().get(sessionId);
-  if (!session?.todos) return false;
+  const entry = sessionById.get(sessionId);
+  if (!entry?.session?.todos) return false;
+  const session = entry.session;
   const t = session.todos.find((x) => x.id === todoId);
   if (!t) return false;
   t.status = status;
   session.updatedAt = new Date();
-  saveSessions();
+  saveSessionToProject(session, entry.projectId);
   return true;
 }
 
 export function removeTodo(sessionId: string, todoId: string): boolean {
-  const session = getCurrentSessionsMap().get(sessionId);
-  if (!session?.todos) return false;
+  const entry = sessionById.get(sessionId);
+  if (!entry?.session?.todos) return false;
+  const session = entry.session;
   const i = session.todos.findIndex((x) => x.id === todoId);
   if (i < 0) return false;
   session.todos.splice(i, 1);
   session.updatedAt = new Date();
-  saveSessions();
+  saveSessionToProject(session, entry.projectId);
   return true;
 }
+
+/** No-op for API compatibility; project is passed per-call now. */
+export function setProjectRootForRun(_root: string | null): void {}
+
+/** No-op for API compatibility. */
+export function reloadSessions(): void {}
+
+/** No-op for API compatibility. */
+export function forceReloadSessions(): void {}

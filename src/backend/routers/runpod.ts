@@ -35,6 +35,16 @@ export const runpodRouter = router({
     .input(configSchema)
     .mutation(async ({ input }) => runpod.getPods(input)),
 
+  /** List pods for the Providers page using existing RunPod config (RUNPOD_API_KEY env). */
+  listPodsForProvider: publicProcedure.query(async () => {
+    const apiKey = (process.env.RUNPOD_API_KEY ?? '').trim();
+    const endpoint = (process.env.RUNPOD_ENDPOINT ?? '').trim();
+    if (!apiKey) {
+      return { success: false as const, pods: [] as runpod.RunPodPod[], error: 'RunPod is not configured. Set RUNPOD_API_KEY in your environment or configure RunPod on the Configure RunPod tab.' };
+    }
+    return runpod.getPods({ apiKey, endpoint: endpoint || undefined });
+  }),
+
   startPod: publicProcedure
     .input(configSchema.and(z.object({ podId: z.string().min(1) })))
     .mutation(async ({ input }) => {

@@ -23,6 +23,7 @@ import * as runProgressStore from '../../agent/runProgressStore';
 import { getAllModes, getMode } from '../../agent/modes';
 import { getAllProviders } from '../../shared/providers';
 import { getCombinedRules, runAgentLoop } from '../../agent/runLoop';
+import * as agentStream from '../agentStream';
 
 const PLANS_DIR = '.konstruct/plans';
 const RULES_DIR = '.konstruct/rules';
@@ -172,7 +173,8 @@ export const chatRouter = router({
       })
     )
     .query(({ input, ctx }) => {
-      const session = sessionStore.getSession(input.sessionId);
+      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const session = sessionStore.getSession(input.sessionId, projectId);
       if (!session) throw new Error('Session not found');
       const modeId = input.modeId ?? 'implementation';
       const mode = getMode(modeId);
@@ -242,12 +244,13 @@ export const chatRouter = router({
           const err = await res.text();
           throw new Error(`Agent worker unavailable: ${res.status} ${err}`);
         }
-        const session = sessionStore.getSession(input.sessionId);
+        const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+        const session = sessionStore.getSession(input.sessionId, projectId);
         if (!session) throw new Error('Session not found');
         return session;
       }
 
-      return runAgentLoop({
+      const session = await runAgentLoop({
         projectRoot: ctx.projectRoot,
         sessionId: input.sessionId,
         content: input.content,
@@ -256,5 +259,11 @@ export const chatRouter = router({
         model: input.model,
         progressStore: runProgressStore,
       });
+      // Notify WebSocket subscribers so the UI refetches session (same as worker path)
+      agentStream.broadcastToSession(
+        input.sessionId,
+        JSON.stringify({ sessionId: input.sessionId, done: true })
+      );
+      return session;
     }),
 });

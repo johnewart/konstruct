@@ -103,13 +103,11 @@ export async function runAgentLoop(
   } = input;
   const modeId = modeIdOpt ?? 'implementation';
 
-  sessionStore.setProjectRootForRun(projectRoot);
-  sessionStore.reloadSessions();
-
   progressStore.clearProgress(sessionId);
   progressStore.setRunning(sessionId, true);
   try {
-    const session = sessionStore.getSession(sessionId);
+    const projectId = sessionStore.resolveProjectId(projectRoot);
+    const session = sessionStore.getSession(sessionId, projectId);
     if (!session) throw new Error('Session not found');
 
     const mode = getMode(modeId);
@@ -158,7 +156,18 @@ export async function runAgentLoop(
         model,
         projectRoot,
         signal,
+        sessionId,
       });
+
+      log.debug(
+        'llm.chat returned',
+        'sessionId:',
+        sessionId,
+        'content length:',
+        response.content?.length ?? 0,
+        'toolCalls:',
+        response.toolCalls?.length ?? 0
+      );
 
       if (response.toolCalls?.length) {
         messages.push({
@@ -175,7 +184,7 @@ export async function runAgentLoop(
           } catch {
             args = {};
           }
-          log.debug('tool', toolName, args);
+          log.debug('tool', 'sessionId:', sessionId, toolName, args);
           if (
             toolName === 'set_status' &&
             typeof args.description === 'string'
@@ -249,7 +258,6 @@ export async function runAgentLoop(
     log.info('runLoop done', sessionId, 'iterations:', iteration);
     return sessionStore.getSession(sessionId)!;
   } finally {
-    sessionStore.setProjectRootForRun(null);
     progressStore.clearProgress(sessionId);
     progressStore.setRunning(sessionId, false);
   }
