@@ -159,6 +159,8 @@ export class AgentRunner {
     console.log('  /clear     - Clear the screen');
     console.log('  /list      - List all sessions');
     console.log('  /session   - Show current session info');
+    console.log('  /switch    - Switch to a session (e.g., /switch <session_id>)');
+    console.log('  /new       - Create a new session and switch to it (optional: /new <title>)');
     console.log('  /providers - List available providers');
     console.log('  /provider  - Select a provider (e.g., /provider openai)');
     console.log('  /exit      - Exit the CLI');

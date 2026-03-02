@@ -37,6 +37,7 @@ import { IconSun, IconMoon } from '@tabler/icons-react';
 import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
 import { RunPodPage } from './pages/RunPod';
+import { VMsPage } from './pages/VMs';
 import { trpc } from '../client/trpc';
 import './index.css';
 
@@ -189,6 +190,7 @@ function TopNav() {
   const isChat =
     location.pathname === '/' || location.pathname.startsWith('/chat/');
   const isRunPod = location.pathname === '/runpod';
+  const isVMs = location.pathname === '/vms';
   const navigate = useNavigate();
 
   return (
@@ -213,6 +215,7 @@ function TopNav() {
         >
           Chat
         </Link>
+
         <Link
           to="/runpod"
           style={{
@@ -223,6 +226,17 @@ function TopNav() {
           }}
         >
           Configure RunPod
+        </Link>
+        <Link
+          to="/vms"
+          style={{
+            fontWeight: isVMs ? 600 : 400,
+            color: 'var(--app-text)',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          VMs
         </Link>
       </Group>
       <Group gap="md">
@@ -251,6 +265,7 @@ function App() {
           <Route path="/chat/:sessionId" element={<Chat />} />
           <Route path="/doc/:id" element={<DocumentPage />} />
           <Route path="/runpod" element={<RunPodPage />} />
+          <Route path="/vms" element={<VMsPage />} />
         </Routes>
       </Box>
     </BrowserRouter>

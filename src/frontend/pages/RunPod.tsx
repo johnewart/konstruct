@@ -58,11 +58,11 @@ import {
   IconLogout,
   IconCopy,
   IconAlertCircle,
-  IconKey,
   IconStar,
   IconStarFilled,
   IconPin,
   IconPinFilled,
+  IconKey,
 } from '@tabler/icons-react';
 import {
   contextLenForGpuCount,
@@ -76,6 +76,7 @@ import {
   getFilteredGpus,
   getTemplateGpuAvailability,
 } from '../lib/runpodCreate';
+
 
 const RUNPOD_CONFIG_KEY = 'runpod-config';
 const RUNPOD_BOOKMARKS_KEY = 'runpod-bookmarked-models';
@@ -1126,13 +1127,13 @@ export function RunPodPage() {
 
   if (!configSaved) {
     return (
-      <Box p="md" maw={480} mx="auto">
+      <Box p="md" maw={520} mx="auto">
         <Paper p="lg" shadow="sm" radius="md" withBorder>
           <Stack gap="md">
             <Text size="xl" fw={700}>
               RunPod
             </Text>
-            <Text size="sm" c="dimmed">
+            <Text size="sm" c="dimmed" mb="sm">
               Connect with your RunPod API key to manage pods. Get your key from{' '}
               <a
                 href="https://www.runpod.io/console/user/settings"
@@ -1255,10 +1256,12 @@ export function RunPodPage() {
           <Button
             variant="subtle"
             color="gray"
-            leftSection={<IconLogout size={16} />}
-            onClick={disconnect}
+            leftSection={<IconKey size={16} />}
+            onClick={() => {
+              setConfigSaved(false);
+            }}
           >
-            Disconnect
+            Configure
           </Button>
         </Group>
       </Group>

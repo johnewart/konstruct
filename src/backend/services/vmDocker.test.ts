@@ -14,21 +14,18 @@
  * limitations under the License.
  */
 
-import { router } from './trpc';
-import { documentsRouter } from '../routers/documents';
-import { sessionsRouter } from '../routers/sessions';
-import { chatRouter } from '../routers/chat';
-import { runpodRouter } from '../routers/runpod';
-import { gitRouter } from '../routers/git';
-import { vmRouter } from '../routers/vm';
+/**
+ * Tests for Docker VM provisioning service
+ */
 
-export const appRouter = router({
-  documents: documentsRouter,
-  sessions: sessionsRouter,
-  chat: chatRouter,
-  runpod: runpodRouter,
-  git: gitRouter,
-  vm: vmRouter,
+import { describe, it, expect } from 'vitest';
+
+describe('Docker VM Service', () => {
+  describe('checkDockerAvailable', () => {
+    it('should return true when Docker is installed', async () => {
+      const { checkDockerAvailable } = await import('./vmDocker');
+      const result = await checkDockerAvailable();
+      expect(result).toBe(true);
+    });
+  });
 });
-
-export type AppRouter = typeof appRouter;

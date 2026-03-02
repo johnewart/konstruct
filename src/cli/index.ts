@@ -31,6 +31,8 @@
  *   /clear     - Clear screen
  *   /list      - List sessions
  *   /session   - Show current session info
+ *   /switch    - Switch to a session (e.g., /switch <session_id>)
+ *   /new       - Create a new session and switch to it
  *   /providers - List available providers
  *   /provider  - Select a provider (e.g., /provider openai)
  *   /exit      - Exit CLI
@@ -106,6 +108,29 @@ async function main(): Promise<void> {
         case 'session':
           await runner.showSession();
           break;
+        case 'switch': {
+          const sessionId = result.args?.trim();
+          if (sessionId) {
+            try {
+              await runner.loadSession(sessionId);
+            } catch (err) {
+              console.log(printError(`Failed to switch session: ${err}`));
+            }
+          } else {
+            console.log(printError('Usage: /switch <session_id>'));
+            console.log(printInfo('Run /list to see session IDs.'));
+          }
+          break;
+        }
+        case 'new': {
+          const title = result.args?.trim() || 'CLI Session';
+          try {
+            await runner.createSession(title);
+          } catch (err) {
+            console.log(printError(`Failed to create session: ${err}`));
+          }
+          break;
+        }
         case 'providers':
           await runner.listProviders();
           break;
