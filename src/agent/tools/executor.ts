@@ -22,11 +22,17 @@ export interface ToolResult {
   retryable?: boolean;
 }
 
-const projectRoot = process.env.PROJECT_ROOT ?? process.cwd();
+const defaultProjectRoot = process.env.PROJECT_ROOT ?? process.cwd();
+
+function rootFromContext(context?: ToolContext): string {
+  return context?.projectRoot ?? defaultProjectRoot;
+}
 
 export function resolvePath(
-  relativePath: string
+  relativePath: string,
+  context?: ToolContext
 ): { fullPath: string } | { error: string } {
+  const projectRoot = rootFromContext(context);
   const fullPath = path.join(projectRoot, relativePath);
   const absPath = path.resolve(fullPath);
   const absRoot = path.resolve(projectRoot);
@@ -39,6 +45,8 @@ export function resolvePath(
 
 export interface ToolContext {
   sessionId?: string;
+  /** Project root for this run (overrides env/cwd when set). */
+  projectRoot?: string;
 }
 
 type Runner = (
@@ -64,6 +72,6 @@ export function executeTool(
   return Promise.resolve(fn(args, context));
 }
 
-export function getProjectRoot(): string {
-  return projectRoot;
+export function getProjectRoot(context?: ToolContext): string {
+  return rootFromContext(context);
 }

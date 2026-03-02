@@ -113,6 +113,41 @@ function TopNavProviderSelector() {
   );
 }
 
+function TopNavProjectSelector() {
+  const utils = trpc.useUtils();
+  const { data: projects = [] } = trpc.projects.list.useQuery();
+  const { data: active } = trpc.projects.getActive.useQuery();
+  const setActive = trpc.projects.setActive.useMutation({
+    onSuccess: () => {
+      void utils.projects.getActive.invalidate();
+    },
+  });
+
+  const options = [
+    { value: '', label: 'No project' },
+    ...projects.map((p) => ({ value: p.id, label: p.name })),
+  ];
+
+  return (
+    <Select
+      value={active?.id ?? ''}
+      onChange={(value) => {
+        setActive.mutate({ projectId: value === '' ? null : value });
+      }}
+      data={options}
+      size="xs"
+      w={180}
+      placeholder="Project"
+      styles={{
+        input: {
+          fontSize: '0.8em',
+          fontWeight: 500,
+        },
+      }}
+    />
+  );
+}
+
 function TopNav() {
   const location = useLocation();
   const isChat =
@@ -172,6 +207,7 @@ function TopNav() {
         </Link>
       </Group>
       <Group gap="md">
+        <TopNavProjectSelector />
         <TopNavProviderSelector />
         <ThemeToggle />
       </Group>

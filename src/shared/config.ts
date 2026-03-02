@@ -67,6 +67,8 @@ export type KonstructConfig = {
   providers?: ConfigProvider[];
   /** Known projects (global config only): name, git URL, location (local path or VM). */
   projects?: KonstructProject[];
+  /** Id of the currently active project. When set and project is local, agent uses its path as root. */
+  activeProjectId?: string | null;
   runpod?: {
     api_key?: string;
     endpoint?: string;
@@ -174,6 +176,10 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
         model: (v.model ?? '') as string,
       };
     })(),
+    activeProjectId:
+      raw.activeProjectId === undefined || raw.activeProjectId === null
+        ? undefined
+        : String(raw.activeProjectId).trim() || undefined,
     projects: (() => {
       const arr = raw.projects as Array<Record<string, unknown>> | undefined;
       if (!Array.isArray(arr)) return undefined;
@@ -234,6 +240,38 @@ export function saveGlobalConfig(config: KonstructConfig): void {
   const obj = config as unknown as Record<string, unknown>;
   writeFileSync(globalPath, stringify(obj), 'utf-8');
   cache.clear();
+}
+
+/**
+ * Get the currently active project id from global config (if any).
+ */
+export function getActiveProjectId(): string | null {
+  const config = loadGlobalConfig();
+  const id = config.activeProjectId?.trim();
+  return id ?? null;
+}
+
+/**
+ * Set the active project id in global config. Pass null to clear (use cwd/env).
+ */
+export function setActiveProjectId(projectId: string | null): void {
+  const config = loadGlobalConfig();
+  config.activeProjectId = projectId ?? undefined;
+  saveGlobalConfig(config);
+}
+
+/**
+ * Get the root directory for the active project. For local projects returns the
+ * resolved path; for VM/container (future) returns null until implemented.
+ * Returns null if no active project or project not found.
+ */
+export function getActiveProjectRoot(): string | null {
+  const id = getActiveProjectId();
+  if (!id) return null;
+  const config = loadGlobalConfig();
+  const project = config.projects?.find((p) => p.id === id);
+  if (!project || project.location.type !== 'local') return null;
+  return path.resolve(project.location.path);
 }
 
 /**

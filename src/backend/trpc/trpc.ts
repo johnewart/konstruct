@@ -16,8 +16,18 @@
 
 import { initTRPC } from '@trpc/server';
 import type { Context } from './context';
+import * as sessionStore from '../../shared/sessionStore';
 
 const t = initTRPC.context<Context>().create();
 
+const setProjectRootMiddleware = t.middleware(async ({ next, ctx }) => {
+  sessionStore.setProjectRootForRun(ctx.projectRoot);
+  try {
+    return await next({ ctx });
+  } finally {
+    sessionStore.setProjectRootForRun(null);
+  }
+});
+
 export const router = t.router;
-export const publicProcedure = t.procedure;
+export const publicProcedure = t.procedure.use(setProjectRootMiddleware);

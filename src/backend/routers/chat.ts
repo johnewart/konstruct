@@ -235,6 +235,7 @@ export const chatRouter = router({
             modeId: input.modeId,
             providerId: input.providerId,
             model: input.model,
+            projectRoot: ctx.projectRoot,
           }),
         });
         if (!res.ok) {

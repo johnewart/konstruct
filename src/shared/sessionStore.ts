@@ -47,8 +47,18 @@ export interface Session {
 }
 
 /** Project root for persistence path (same as executor). */
+let projectRootForRun: string | null = null;
+
+/**
+ * Set the project root for the current run (e.g. active project path).
+ * Call at the start of runAgentLoop and clear in finally.
+ */
+export function setProjectRootForRun(root: string | null): void {
+  projectRootForRun = root;
+}
+
 function getProjectRoot(): string {
-  return process.env.PROJECT_ROOT ?? process.cwd();
+  return projectRootForRun ?? process.env.PROJECT_ROOT ?? process.cwd();
 }
 
 function getSessionsPath(): string {

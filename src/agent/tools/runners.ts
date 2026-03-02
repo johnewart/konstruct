@@ -21,7 +21,7 @@ import { resolvePath, getProjectRoot, registerTool } from './executor';
 import * as documentStore from '../../shared/documentStore';
 import * as sessionStore from '../../shared/sessionStore';
 import * as codebaseOutline from '../../shared/codebaseOutline';
-import type { ToolResult } from './executor';
+import type { ToolContext, ToolResult } from './executor';
 
 function num(v: unknown): number | undefined {
   if (typeof v === 'number' && !Number.isNaN(v)) return v;
@@ -65,10 +65,10 @@ function truncateWithNote(s: string, maxBytes: number, note: string): string {
   return slice.toString('utf-8') + '\n\n' + note;
 }
 
-registerTool('list_files', (args): ToolResult => {
+registerTool('list_files', (args, context): ToolResult => {
   const pathArg = str(args.path);
   if (!pathArg) return { error: 'missing path argument' };
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   const glob = str(args.glob);
   try {
@@ -107,17 +107,17 @@ function matchGlob(glob: string, name: string): boolean {
   }
 }
 
-registerTool('glob', (args): ToolResult => {
+registerTool('glob', (args, context): ToolResult => {
   const pattern = str(args.pattern);
   if (!pattern) return { error: 'missing pattern argument' };
   const pathArg = str(args.path) ?? '.';
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   const matched: string[] = [];
   try {
     walkSync(resolved.fullPath, (p) => {
       if (matched.length >= MAX_LIST_ENTRIES) return;
-      let rel = path.relative(getProjectRoot(), p);
+      let rel = path.relative(getProjectRoot(context), p);
       if (path.sep !== '/') rel = rel.split(path.sep).join('/');
       const base = path.basename(p);
       if (matchGlob(pattern, base)) matched.push(rel);
@@ -151,14 +151,14 @@ function walkSync(dir: string, onFile: (p: string) => void) {
   }
 }
 
-registerTool('read_file_region', (args): ToolResult => {
+registerTool('read_file_region', (args, context): ToolResult => {
   const pathArg = str(args.path);
   const startLine = num(args.start_line);
   const endLine = num(args.end_line);
   if (!pathArg) return { error: 'missing path argument' };
   if (startLine == null) return { error: 'missing or invalid start_line' };
   if (endLine == null) return { error: 'missing or invalid end_line' };
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     const stat = fs.statSync(resolved.fullPath);
@@ -192,12 +192,12 @@ registerTool('read_file_region', (args): ToolResult => {
   }
 });
 
-registerTool('grep', (args): ToolResult => {
+registerTool('grep', (args, context): ToolResult => {
   const pattern = str(args.pattern);
   if (!pattern) return { error: 'missing pattern argument' };
   const pathArg = str(args.path) ?? '.';
   const contextLines = num(args.context) ?? 0;
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   let re: RegExp;
   try {
@@ -207,7 +207,7 @@ registerTool('grep', (args): ToolResult => {
   }
   const results: string[] = [];
   const fullPath = resolved.fullPath;
-  const root = getProjectRoot();
+  const root = getProjectRoot(context);
   const searchInFile = (filePath: string, rel: string) => {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
@@ -252,11 +252,11 @@ registerTool('grep', (args): ToolResult => {
   return { result: out || '(no matches)' };
 });
 
-registerTool('search_code', (args): ToolResult => {
+registerTool('search_code', (args, context): ToolResult => {
   const pattern = str(args.pattern);
   const pathArg = str(args.path) ?? '.';
   if (!pattern) return { error: 'missing pattern argument' };
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   let re: RegExp;
   try {
@@ -266,7 +266,7 @@ registerTool('search_code', (args): ToolResult => {
   }
   const results: string[] = [];
   const fullPath = resolved.fullPath;
-  const root = getProjectRoot();
+  const root = getProjectRoot(context);
   const searchInFile = (filePath: string, rel: string) => {
     if (results.length >= MAX_SEARCH_MATCHES) return;
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -305,12 +305,12 @@ registerTool('search_code', (args): ToolResult => {
   return { result: out };
 });
 
-registerTool('codebase_outline', (args): ToolResult => {
+registerTool('codebase_outline', (args, context): ToolResult => {
   const pathArg = str(args.path);
   if (!pathArg) return { error: 'missing path argument' };
   const glob = str(args.glob);
-  const root = getProjectRoot();
-  const resolved = resolvePath(pathArg);
+  const root = getProjectRoot(context);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     const { outline, truncated } = codebaseOutline.outlinePath(
@@ -334,14 +334,14 @@ registerTool('codebase_outline', (args): ToolResult => {
   }
 });
 
-registerTool('edit_file', (args): ToolResult => {
+registerTool('edit_file', (args, context): ToolResult => {
   const pathArg = str(args.path);
   const oldStr = str(args.old_string);
   const newStr = str(args.new_string);
   if (!pathArg) return { error: 'missing path argument' };
   if (!oldStr) return { error: 'missing old_string argument' };
   if (newStr === undefined) return { error: 'missing new_string argument' };
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     const content = fs.readFileSync(resolved.fullPath, 'utf-8');
@@ -369,12 +369,12 @@ registerTool('edit_file', (args): ToolResult => {
   }
 });
 
-registerTool('write_file', (args): ToolResult => {
+registerTool('write_file', (args, context): ToolResult => {
   const pathArg = str(args.path);
   const content = str(args.content);
   if (!pathArg) return { error: 'missing path argument' };
   if (content === undefined) return { error: 'missing content argument' };
-  const resolved = resolvePath(pathArg);
+  const resolved = resolvePath(pathArg, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     fs.mkdirSync(path.dirname(resolved.fullPath), { recursive: true });
@@ -403,7 +403,7 @@ function truncateRunOutput(s: string, maxChars: number): string {
   );
 }
 
-registerTool('run_command', (args): ToolResult => {
+registerTool('run_command', (args, context): ToolResult => {
   const raw = str(args.command);
   if (!raw) return { error: 'missing command argument' };
   const command = raw.trim();
@@ -413,7 +413,7 @@ registerTool('run_command', (args): ToolResult => {
   const maxOut = Math.floor(MAX_RUN_COMMAND_OUTPUT / 2);
   try {
     const result = execSync(command, {
-      cwd: getProjectRoot(),
+      cwd: getProjectRoot(context),
       encoding: 'utf-8',
       timeout: 120_000,
       maxBuffer: 10 * 1024 * 1024,
@@ -463,7 +463,7 @@ registerTool('run_command', (args): ToolResult => {
   }
 });
 
-registerTool('create_plan', (args): ToolResult => {
+registerTool('create_plan', (args, context): ToolResult => {
   const filename = str(args.filename);
   const content = str(args.content);
   if (!filename) return { error: 'missing filename argument' };
@@ -472,7 +472,7 @@ registerTool('create_plan', (args): ToolResult => {
     return { error: 'filename should not contain path separators' };
   }
   const planPath = path.join('.konstruct', 'plans', filename);
-  const resolved = resolvePath(planPath);
+  const resolved = resolvePath(planPath, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     fs.mkdirSync(path.dirname(resolved.fullPath), { recursive: true });
@@ -497,7 +497,7 @@ registerTool('create_plan', (args): ToolResult => {
   }
 });
 
-registerTool('create_design', (args): ToolResult => {
+registerTool('create_design', (args, context): ToolResult => {
   const filename = str(args.filename);
   const content = str(args.content);
   if (!filename) return { error: 'missing filename argument' };
@@ -506,7 +506,7 @@ registerTool('create_design', (args): ToolResult => {
     return { error: 'filename should not contain path separators' };
   }
   const designPath = path.join('.konstruct', 'designs', filename);
-  const resolved = resolvePath(designPath);
+  const resolved = resolvePath(designPath, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     fs.mkdirSync(path.dirname(resolved.fullPath), { recursive: true });
@@ -533,7 +533,8 @@ registerTool('create_design', (args): ToolResult => {
 
 function editPlanOrDesign(
   kind: 'plan' | 'design',
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context?: ToolContext
 ): ToolResult {
   const filename = str(args.filename);
   const oldStr = str(args.old_string);
@@ -550,7 +551,7 @@ function editPlanOrDesign(
     kind === 'plan' ? 'plans' : 'designs',
     filename
   );
-  const resolved = resolvePath(subPath);
+  const resolved = resolvePath(subPath, context);
   if ('error' in resolved) return { error: resolved.error };
   try {
     const content = fs.readFileSync(resolved.fullPath, 'utf-8');
@@ -576,8 +577,8 @@ function editPlanOrDesign(
   }
 }
 
-registerTool('edit_plan', (args) => editPlanOrDesign('plan', args));
-registerTool('edit_design', (args) => editPlanOrDesign('design', args));
+registerTool('edit_plan', (args, context) => editPlanOrDesign('plan', args, context));
+registerTool('edit_design', (args, context) => editPlanOrDesign('design', args, context));
 
 registerTool('set_status', (args): ToolResult => {
   const desc = str(args.description);

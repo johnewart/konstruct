@@ -103,6 +103,7 @@ export async function runAgentLoop(
   } = input;
   const modeId = modeIdOpt ?? 'implementation';
 
+  sessionStore.setProjectRootForRun(projectRoot);
   sessionStore.reloadSessions();
 
   progressStore.clearProgress(sessionId);
@@ -194,6 +195,7 @@ export async function runAgentLoop(
           }
           const result = await executeTool(toolName, args, {
             sessionId,
+            projectRoot,
           });
           let resultContent = result.error ?? result.result ?? '';
           const maxToolResultChars = 28 * 1024;
@@ -247,6 +249,7 @@ export async function runAgentLoop(
     log.info('runLoop done', sessionId, 'iterations:', iteration);
     return sessionStore.getSession(sessionId)!;
   } finally {
+    sessionStore.setProjectRootForRun(null);
     progressStore.clearProgress(sessionId);
     progressStore.setRunning(sessionId, false);
   }

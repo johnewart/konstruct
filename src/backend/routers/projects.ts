@@ -17,7 +17,13 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import { loadGlobalConfig, saveGlobalConfig } from '../../shared/config';
+import {
+  loadGlobalConfig,
+  saveGlobalConfig,
+  getActiveProjectId,
+  setActiveProjectId,
+  getActiveProjectRoot,
+} from '../../shared/config';
 import type { KonstructProject } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
 
@@ -97,8 +103,35 @@ export const projectsRouter = router({
       const filtered = projects.filter((p) => p.id !== input.id);
       if (filtered.length === projects.length) throw new Error('Project not found');
       config.projects = filtered;
+      if (getActiveProjectId() === input.id) config.activeProjectId = undefined;
       saveGlobalConfig(config);
       log.debug('remove', input.id);
       return { id: input.id };
+    }),
+
+  getActive: publicProcedure.query(() => {
+    const id = getActiveProjectId();
+    if (!id) return null;
+    const config = loadGlobalConfig();
+    const project = config.projects?.find((p) => p.id === id);
+    if (!project) return null;
+    const root = getActiveProjectRoot();
+    return {
+      id: project.id,
+      name: project.name,
+      root: root ?? undefined,
+    };
+  }),
+
+  setActive: publicProcedure
+    .input(z.object({ projectId: z.string().nullable() }))
+    .mutation(({ input }) => {
+      if (input.projectId === '') {
+        setActiveProjectId(null);
+        return { projectId: null };
+      }
+      setActiveProjectId(input.projectId);
+      log.debug('setActive', input.projectId);
+      return { projectId: getActiveProjectId() };
     }),
 });

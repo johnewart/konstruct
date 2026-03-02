@@ -155,6 +155,7 @@ const server = Bun.serve({
           modeId?: string;
           providerId?: string;
           model?: string;
+          projectRoot?: string;
         };
         if (!body?.sessionId || !body?.content) {
           return new Response(
@@ -166,6 +167,10 @@ const server = Bun.serve({
           );
         }
         const sessionId = body.sessionId;
+        const runProjectRoot =
+          typeof body.projectRoot === 'string' && body.projectRoot.trim()
+            ? body.projectRoot.trim()
+            : projectRoot;
         abortControllersBySession.get(sessionId)?.abort();
         const controller = new AbortController();
         abortControllersBySession.set(sessionId, controller);
@@ -174,7 +179,7 @@ const server = Bun.serve({
           sendProgressToServer(sid, payload)
         );
         void runAgentLoop({
-          projectRoot,
+          projectRoot: runProjectRoot,
           sessionId,
           content: body.content,
           modeId: body.modeId,
