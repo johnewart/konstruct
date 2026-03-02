@@ -499,6 +499,13 @@ export function Chat() {
     }
   );
 
+  // When session is not found (e.g. belongs to another project after switch), go to chat home
+  useEffect(() => {
+    if (sessionId && error) {
+      navigate('/', { replace: true });
+    }
+  }, [sessionId, error, navigate]);
+
   // When agent run finishes (running goes true -> false), refetch session so UI shows final messages
   useEffect(() => {
     const running = runProgress?.running === true;

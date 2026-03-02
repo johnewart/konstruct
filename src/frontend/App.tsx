@@ -61,11 +61,15 @@ function ThemeToggle() {
 
 function TopNavProjectSelector() {
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const { data: active } = trpc.projects.getActive.useQuery();
   const setActive = trpc.projects.setActive.useMutation({
     onSuccess: () => {
       void utils.projects.getActive.invalidate();
+      void utils.sessions.list.invalidate();
+      void utils.chat.listProviders.invalidate();
+      navigate('/');
     },
   });
 

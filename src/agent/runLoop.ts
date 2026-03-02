@@ -108,7 +108,11 @@ export async function runAgentLoop(
   try {
     const projectId = sessionStore.resolveProjectId(projectRoot);
     const session = sessionStore.getSession(sessionId, projectId);
-    if (!session) throw new Error('Session not found');
+    if (!session) {
+      throw new Error(
+        `Session not found. It may belong to a different project (current project: ${projectId}). Try switching project or opening a session from the current project.`
+      );
+    }
 
     const mode = getMode(modeId);
     let systemPrompt =
