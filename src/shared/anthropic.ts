@@ -20,7 +20,7 @@
  */
 
 import type { ChatMessage, ToolDefinition } from './llm';
-import { getAnthropicEnv } from './providers';
+import { getAnthropicEnvAsync } from './providers';
 import { createLogger } from './logger';
 
 const log = createLogger('anthropic');
@@ -128,7 +128,7 @@ export async function chat(
     function: { name: string; arguments: string };
   }>;
 }> {
-  const { apiKey, model: defaultModel } = getAnthropicEnv(
+  const { apiKey, model: defaultModel } = await getAnthropicEnvAsync(
     options?.projectRoot ?? ''
   );
   const model = options?.model ?? defaultModel;

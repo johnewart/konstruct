@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { getOpenAIEnv, getRunpodEnv, getOllamaEnv } from './providers';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { createLogger } from './logger';
@@ -89,8 +89,8 @@ export async function chat(
   const env = isOllama
     ? getOllamaEnv(projectRoot)
     : isRunpod
-      ? getRunpodEnv(projectRoot)
-      : getOpenAIEnv(projectRoot);
+      ? await getRunpodEnvAsync(projectRoot, providerId)
+      : await getOpenAIEnvAsync(projectRoot, providerId);
   const baseUrl = env.baseUrl;
   const apiKey = 'apiKey' in env ? (env as { apiKey: string }).apiKey : '';
   const defaultModel = env.model;

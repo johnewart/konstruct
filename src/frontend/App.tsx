@@ -38,6 +38,7 @@ import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
 import { RunPodPage } from './pages/RunPod';
 import { VMsPage } from './pages/VMs';
+import { ProjectsPage } from './pages/Projects';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
 import './index.css';
@@ -120,6 +121,7 @@ function TopNav() {
     location.pathname === '/' || location.pathname.startsWith('/chat/');
   const isRunPod = location.pathname === '/runpod';
   const isVMs = location.pathname === '/vms';
+  const isProjects = location.pathname === '/projects';
   const isCli = location.pathname === '/cli';
 
   return (
@@ -168,6 +170,17 @@ function TopNav() {
           VMs
         </Link>
         <Link
+          to="/projects"
+          style={{
+            fontWeight: isProjects ? 600 : 400,
+            color: 'var(--app-text)',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          Projects
+        </Link>
+        <Link
           to="/cli"
           style={{
             fontWeight: isCli ? 600 : 400,
@@ -205,6 +218,7 @@ function App() {
           <Route path="/doc/:id" element={<DocumentPage />} />
           <Route path="/runpod" element={<RunPodPage />} />
           <Route path="/vms" element={<VMsPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/cli" element={<FallbackCli />} />
         </Routes>
       </Box>

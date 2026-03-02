@@ -15,11 +15,11 @@
  */
 
 /**
- * LLM provider config aligned with the Go app. Uses the same config YAML as Go
- * (.konstruct/config.yml or ~/.config/code_assist/config.yml). Env vars override config.
+ * LLM provider config. Uses ~/.config/konstruct/config.yml and optional
+ * .konstruct/config.yml overlay. Secrets via env vars or refs (env: or 1pass:).
  */
 
-import { loadConfig } from './config';
+import { loadConfig, getProviderById, resolveProviderSecret, saveConfig } from './config';
 import { getDefaultPodId } from './runpodProject';
 
 export type ProviderOption = {
@@ -43,6 +43,21 @@ function getEnv(name: string): string {
 function getVastApiKey(projectRoot: string): string {
   const c = loadConfig(projectRoot);
   return getEnv('VAST_API_KEY') || c.vast?.api_key || '';
+}
+
+/** True if provider has credentials (env, legacy api_key, or config provider with secret_ref). */
+function isProviderConfiguredWithSecret(
+  projectRoot: string,
+  providerId: string,
+  type: 'openai' | 'anthropic' | 'runpod'
+): boolean {
+  const c = loadConfig(projectRoot);
+  const provider = getProviderById(c, providerId);
+  if (provider?.secret_ref?.trim()) return true;
+  if (type === 'openai') return !!(getEnv('OPENAI_API_KEY') || c.llm?.api_key || getVastApiKey(projectRoot));
+  if (type === 'anthropic') return !!(getEnv('ANTHROPIC_API_KEY') || c.llm?.api_key);
+  if (type === 'runpod') return !!(getEnv('RUNPOD_API_KEY') || c.runpod?.api_key);
+  return false;
 }
 
 /** OpenAI-compatible provider. Precedence: env (OPENAI_*) then config.llm, then "vast" if Vast key set. */
@@ -135,7 +150,67 @@ export function getRunpodEnv(projectRoot: string): {
   return { baseUrl, apiKey, model: model || 'default' };
 }
 
-/** Returns all provider options for the UI plus default provider from config. Uses config YAML (same as Go). */
+/** Async: prefer provider secret_ref (env: or 1pass:), then fall back to sync getOpenAIEnv. */
+export async function getOpenAIEnvAsync(
+  projectRoot: string,
+  providerId?: string
+): Promise<{ baseUrl: string; apiKey: string; model: string }> {
+  const c = loadConfig(projectRoot);
+  const id = (providerId ?? c.llm?.provider ?? 'openai').toLowerCase();
+  const resolved = await resolveProviderSecret(projectRoot, id);
+  if (resolved != null) {
+    const provider = getProviderById(c, id);
+    const baseUrl =
+      provider?.base_url ??
+      getEnv('OPENAI_BASE_URL') ??
+      c.llm?.base_url ??
+      'https://api.openai.com/v1';
+    const model =
+      provider?.default_model ??
+      getEnv('OPENAI_MODEL') ??
+      c.llm?.model ??
+      'gpt-4o-mini';
+    return { baseUrl, apiKey: resolved, model };
+  }
+  return getOpenAIEnv(projectRoot);
+}
+
+/** Async: prefer provider secret_ref, then fall back to sync getAnthropicEnv. */
+export async function getAnthropicEnvAsync(
+  projectRoot: string,
+  providerId?: string
+): Promise<{ apiKey: string; model: string }> {
+  const c = loadConfig(projectRoot);
+  const id = (providerId ?? c.llm?.provider ?? 'anthropic').toLowerCase();
+  const resolved = await resolveProviderSecret(projectRoot, id);
+  if (resolved != null) {
+    const provider = getProviderById(c, id);
+    const model =
+      provider?.default_model ??
+      getEnv('ANTHROPIC_MODEL') ??
+      c.llm?.model ??
+      'claude-sonnet-4-20250514';
+    return { apiKey: resolved, model };
+  }
+  return getAnthropicEnv(projectRoot);
+}
+
+/** Async: prefer provider secret_ref, then fall back to sync getRunpodEnv. */
+export async function getRunpodEnvAsync(
+  projectRoot: string,
+  providerId?: string
+): Promise<{ baseUrl: string; apiKey: string; model: string }> {
+  const c = loadConfig(projectRoot);
+  const id = (providerId ?? c.llm?.provider ?? 'runpod').toLowerCase();
+  const resolved = await resolveProviderSecret(projectRoot, id);
+  const sync = getRunpodEnv(projectRoot);
+  if (resolved != null) {
+    return { ...sync, apiKey: resolved };
+  }
+  return sync;
+}
+
+/** Returns all provider options for the UI plus default provider from config. */
 export function getAllProviders(projectRoot: string): {
   providers: Array<{
     id: string;
@@ -162,7 +237,7 @@ export function getAllProviders(projectRoot: string): {
       id: 'openai',
       name: 'OpenAI / Vast',
       defaultModel: openaiEnv.model,
-      configured: !!openaiEnv.apiKey,
+      configured: !!openaiEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'openai', 'openai'),
       url: openaiEnv.baseUrl || undefined,
     },
     {
@@ -176,14 +251,14 @@ export function getAllProviders(projectRoot: string): {
       id: 'runpod',
       name: 'RunPod',
       defaultModel: runpodEnv.model || 'default',
-      configured: !!runpodEnv.baseUrl,
+      configured: !!runpodEnv.baseUrl || isProviderConfiguredWithSecret(projectRoot, 'runpod', 'runpod'),
       url: runpodEnv.baseUrl || undefined,
     },
     {
       id: 'anthropic',
       name: 'Anthropic',
       defaultModel: anthropicEnv.model,
-      configured: !!anthropicEnv.apiKey,
+      configured: !!anthropicEnv.apiKey || isProviderConfiguredWithSecret(projectRoot, 'anthropic', 'anthropic'),
     },
     {
       id: 'bedrock',
@@ -194,88 +269,23 @@ export function getAllProviders(projectRoot: string): {
       configured: isBedrockConfigured(projectRoot),
     },
   ];
-  const rawProvider = (c.llm.provider ?? '').toLowerCase();
-  const defaultProviderId =
-    rawProvider === 'anthropic' ||
-    rawProvider === 'bedrock' ||
-    rawProvider === 'runpod' ||
-    rawProvider === 'ollama'
-      ? rawProvider
-      : 'openai';
+  const rawProvider = (c.llm.provider ?? '').trim();
+  const isKnown =
+    rawProvider &&
+    (['anthropic', 'bedrock', 'runpod', 'ollama', 'openai'].includes(rawProvider.toLowerCase()) ||
+    getProviderById(c, rawProvider);
+  const defaultProviderId: string = isKnown ? rawProvider : 'openai';
   return { providers, defaultProviderId };
 }
 
-/** Update the default provider in the config file. */
+/** Update the default provider in the config file (project or global). */
 export function setDefaultProvider(providerId: string, projectRoot: string): void {
-  const { loadConfig, getProjectConfigPath, getGlobalConfigPath } = require('./config');
-  const fs = require('fs');
-  const path = require('path');
-  const { parse, stringify } = require('yaml');
-
-  // Determine which config file to update
-  let configPath: string;
-  const projectPath = getProjectConfigPath(projectRoot);
-  
-  if (projectRoot && fs.existsSync(projectPath)) {
-    configPath = projectPath;
-  } else {
-    configPath = getGlobalConfigPath();
-  }
-
-  // Load existing config
-  let config: any = {};
-  if (fs.existsSync(configPath)) {
-    try {
-      const content = fs.readFileSync(configPath, 'utf-8');
-      const parsed = parse(content);
-      if (parsed && typeof parsed === 'object') {
-        config = parsed;
-      }
-    } catch (e) {
-      // If parsing fails, start with empty config
-    }
-  }
-
-  // Ensure llm object exists
-  if (!config.llm) {
-    config.llm = {};
-  }
-
-  // Update provider
-  config.llm.provider = providerId;
-
-  // Write back to file
-  const yamlContent = stringify(config);
-  fs.writeFileSync(configPath, yamlContent, 'utf-8');
-}
-
-/** Update the default provider in the config file. */
-export function setDefaultProvider(providerId: string, projectRoot: string): void {
-  const { loadConfig, updateConfig } = require('./config');
-  const config = loadConfig(projectRoot);
-  
-  // Validate provider
-  const validProviders = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
-  if (!validProviders.includes(providerId)) {
-    throw new Error(`Invalid provider: ${providerId}`);
-  }
-  
-  // Update config
-  config.llm.provider = providerId;
-  updateConfig(config, projectRoot);
-}
-
-/** Update the default provider in the config file. */
-export function setDefaultProvider(providerId: string, projectRoot: string): void {
-  const { loadConfig, saveConfig } = require('./config');
-  const config = loadConfig(projectRoot);
-  
-  // Validate provider
   const validProviders = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
   if (!validProviders.includes(providerId)) {
     throw new Error(`Invalid provider: ${providerId}. Must be one of: ${validProviders.join(', ')}`);
   }
-  
+  const config = loadConfig(projectRoot);
+  config.llm = config.llm ?? {};
   config.llm.provider = providerId;
   saveConfig(config, projectRoot);
 }

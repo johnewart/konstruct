@@ -21,6 +21,7 @@ import { chatRouter } from '../routers/chat';
 import { runpodRouter } from '../routers/runpod';
 import { gitRouter } from '../routers/git';
 import { vmRouter } from '../routers/vm';
+import { projectsRouter } from '../routers/projects';
 
 export const appRouter = router({
   documents: documentsRouter,
@@ -29,6 +30,7 @@ export const appRouter = router({
   runpod: runpodRouter,
   git: gitRouter,
   vm: vmRouter,
+  projects: projectsRouter,
 });
 
 export type AppRouter = typeof appRouter;
