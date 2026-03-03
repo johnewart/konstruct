@@ -1541,7 +1541,7 @@ export function Chat() {
                   <div className="chat-form-mode-image">
                     <img
                       src={`/static/konstruct-${
-                        ({ ask: 'ask', planning: 'planner', research: 'researcher', architecture: 'architect', implementation: 'builder' } as Record<string, string>)[
+                        ({ ask: 'ask', planning: 'planner', research: 'researcher', architecture: 'architect', implementation: 'builder', testing: 'tester' } as Record<string, string>)[
                           modeId
                         ] ?? 'builder'
                       }.png`}
