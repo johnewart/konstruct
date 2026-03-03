@@ -20,6 +20,8 @@
  * Set AGENT_PORT (default 3002), SERVER_URL (e.g. http://localhost:3001) for the server to connect to.
  */
 import 'dotenv/config';
+import http from 'node:http';
+import WebSocket from 'ws';
 import { runAgentLoop, type RunProgressStore } from './runLoop';
 import { createLogger } from '../shared/logger';
 
@@ -143,116 +145,107 @@ connectStreamSocket();
 
 const abortControllersBySession = new Map<string, AbortController>();
 
-const server = Bun.serve({
-  port: PORT,
-  async fetch(req) {
-    const url = new URL(req.url);
-    try {
-      if (req.method === 'POST' && url.pathname === '/run') {
-        const body = (await req.json()) as {
-          sessionId: string;
-          content: string;
-          modeId?: string;
-          providerId?: string;
-          model?: string;
-          projectRoot?: string;
-        };
-        if (!body?.sessionId || !body?.content) {
-          return new Response(
-            JSON.stringify({ error: 'sessionId and content required' }),
-            {
-              status: 400,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          );
-        }
-        const sessionId = body.sessionId;
-        const runProjectRoot =
-          typeof body.projectRoot === 'string' && body.projectRoot.trim()
-            ? body.projectRoot.trim()
-            : projectRoot;
-        abortControllersBySession.get(sessionId)?.abort();
-        const controller = new AbortController();
-        abortControllersBySession.set(sessionId, controller);
-        sendProgressToServer(sessionId, { entries: [], running: true });
-        const progressStore = createProgressStore((sid, payload) =>
-          sendProgressToServer(sid, payload)
-        );
-        void runAgentLoop({
-          projectRoot: runProjectRoot,
-          sessionId,
-          content: body.content,
-          modeId: body.modeId,
-          providerId: body.providerId,
-          model: body.model,
-          progressStore,
-          signal: controller.signal,
-        })
-          .then(() => {
-            abortControllersBySession.delete(sessionId);
-            sendProgressToServer(sessionId, {
-              entries: getProgress(sessionId),
-              running: false,
-              done: true,
-            });
-          })
-          .catch((err) => {
-            abortControllersBySession.delete(sessionId);
-            if (err?.name !== 'AbortError') log.error('runLoop error', err);
-            sendProgressToServer(sessionId, {
-              entries: getProgress(sessionId),
-              running: false,
-              done: true,
-            });
-          });
-        return new Response(JSON.stringify({ accepted: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
+function parseBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res: http.ServerResponse, status: number, data: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  try {
+    if (req.method === 'POST' && url.pathname === '/run') {
+      const raw = await parseBody(req);
+      const body = JSON.parse(raw) as {
+        sessionId: string;
+        content: string;
+        modeId?: string;
+        providerId?: string;
+        model?: string;
+        projectRoot?: string;
+      };
+      if (!body?.sessionId || !body?.content) {
+        sendJson(res, 400, { error: 'sessionId and content required' });
+        return;
       }
-      if (req.method === 'POST' && url.pathname.startsWith('/abort/')) {
-        const sessionId = decodeURIComponent(
-          url.pathname.slice('/abort/'.length)
-        );
-        const controller = abortControllersBySession.get(sessionId);
-        if (controller) {
-          controller.abort();
+      const sessionId = body.sessionId;
+      const runProjectRoot =
+        typeof body.projectRoot === 'string' && body.projectRoot.trim()
+          ? body.projectRoot.trim()
+          : projectRoot;
+      abortControllersBySession.get(sessionId)?.abort();
+      const controller = new AbortController();
+      abortControllersBySession.set(sessionId, controller);
+      sendProgressToServer(sessionId, { entries: [], running: true });
+      const progressStore = createProgressStore((sid, payload) =>
+        sendProgressToServer(sid, payload)
+      );
+      void runAgentLoop({
+        projectRoot: runProjectRoot,
+        sessionId,
+        content: body.content,
+        modeId: body.modeId,
+        providerId: body.providerId,
+        model: body.model,
+        progressStore,
+        signal: controller.signal,
+      })
+        .then(() => {
           abortControllersBySession.delete(sessionId);
-        }
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      if (req.method === 'GET' && url.pathname.startsWith('/progress/')) {
-        const sessionId = decodeURIComponent(
-          url.pathname.slice('/progress/'.length)
-        );
-        return new Response(
-          JSON.stringify({
+          sendProgressToServer(sessionId, {
             entries: getProgress(sessionId),
-            running: isRunning(sessionId),
-          }),
-          {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-      }
-      return new Response('Not Found', { status: 404 });
-    } catch (e) {
-      log.error('request error', e);
-      return new Response(JSON.stringify({ error: String(e) }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
+            running: false,
+            done: true,
+          });
+        })
+        .catch((err) => {
+          abortControllersBySession.delete(sessionId);
+          if (err?.name !== 'AbortError') log.error('runLoop error', err);
+          sendProgressToServer(sessionId, {
+            entries: getProgress(sessionId),
+            running: false,
+            done: true,
+          });
+        });
+      sendJson(res, 200, { accepted: true });
+      return;
     }
-  },
+    if (req.method === 'POST' && url.pathname.startsWith('/abort/')) {
+      const sessionId = decodeURIComponent(url.pathname.slice('/abort/'.length));
+      const controller = abortControllersBySession.get(sessionId);
+      if (controller) {
+        controller.abort();
+        abortControllersBySession.delete(sessionId);
+      }
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/progress/')) {
+      const sessionId = decodeURIComponent(
+        url.pathname.slice('/progress/'.length)
+      );
+      sendJson(res, 200, {
+        entries: getProgress(sessionId),
+        running: isRunning(sessionId),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end('Not Found');
+  } catch (e) {
+    log.error('request error', e);
+    sendJson(res, 500, { error: String(e) });
+  }
 });
 
-log.info(
-  'listening',
-  `http://localhost:${server.port}`,
-  'projectRoot:',
-  projectRoot
-);
+server.listen(PORT, () => {
+  log.info('listening', `http://localhost:${PORT}`, 'projectRoot:', projectRoot);
+});

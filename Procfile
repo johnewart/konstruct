@@ -1,3 +1,3 @@
-web: bun src/backend/index.ts
-ui: bun run vite
-agent: bun run src/agent/agent-worker.ts
+web: npm run server:no-watch
+frontend: npm run frontend
+agent: npm run agent

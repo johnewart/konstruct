@@ -23,7 +23,7 @@ import * as path from 'path';
 import { getParser } from './ast';
 import type { TSNode } from './ast';
 
-/** Node types for imports/exports */
+/** Node types for imports/exports (require is call_expression with identifier "require") */
 export const IMPORT_EXPORT_NODES = new Set([
   'import_statement',
   'import_clause',
@@ -33,6 +33,8 @@ export const IMPORT_EXPORT_NODES = new Set([
   'export_all_declaration',
   'require_expression',
   'module_declaration',
+  'call_expression',
+  'assignment_expression',
 ]);
 
 export interface DependencyNode {
@@ -71,11 +73,27 @@ export function buildDependencyGraph(
   const tree = parser.parse(sourceCode);
   const graph: DependencyGraph = { nodes: [], edges: [] };
 
-  graph.nodes.push({
-    path: filePath,
-    name: path.basename(filePath),
-    type: 'file',
-  });
+  /** Collect first identifier text from a node's subtree (for import/export clause). */
+  function collectFirstIdentifier(n: TSNode | null): string {
+    if (!n) return '';
+    if (n.type === 'identifier') return sourceCode.slice(n.startIndex, n.endIndex);
+    for (let i = 0; i < n.childCount; i++) {
+      const s = collectFirstIdentifier(n.child(i));
+      if (s) return s;
+    }
+    return '';
+  }
+
+  /** Collect all identifier texts from a node's subtree (for export clause). */
+  function collectIdentifiers(n: TSNode | null): string[] {
+    if (!n) return [];
+    const out: string[] = [];
+    if (n.type === 'identifier') out.push(sourceCode.slice(n.startIndex, n.endIndex));
+    for (let i = 0; i < n.childCount; i++) {
+      out.push(...collectIdentifiers(n.child(i)));
+    }
+    return out;
+  }
 
   function walk(node: TSNode | null) {
     if (!node) return;
@@ -91,7 +109,7 @@ export function buildDependencyGraph(
           const child = node.child(i);
           if (!child) continue;
 
-          if (child.type === 'string_literal') {
+          if (child.type === 'string' || child.type === 'string_literal') {
             const pathText = sourceCode.slice(child.startIndex, child.endIndex);
             modulePath = pathText.slice(1, -1);
           } else if (child.type === 'identifier' && modulePath === '') {
@@ -107,7 +125,24 @@ export function buildDependencyGraph(
             );
             modulePath = resolvedPath;
           }
-
+          // Set identifier for named imports (import { x } from 'y') and default (import x from 'y'), not namespace/side-effect
+          const hasNamedImports = (n: TSNode | null): boolean => {
+            if (!n) return false;
+            if (n.type === 'named_imports') return true;
+            for (let i = 0; i < n.childCount; i++) {
+              if (hasNamedImports(n.child(i))) return true;
+            }
+            return false;
+          };
+          const hasNamespaceImport = (n: TSNode | null): boolean => {
+            if (!n) return false;
+            if (n.type === 'namespace_import') return true;
+            for (let i = 0; i < n.childCount; i++) {
+              if (hasNamespaceImport(n.child(i))) return true;
+            }
+            return false;
+          };
+          if (!identifier && (hasNamedImports(node) || !hasNamespaceImport(node))) identifier = collectFirstIdentifier(node);
           graph.edges.push({
             source: filePath,
             target: modulePath,
@@ -131,7 +166,7 @@ export function buildDependencyGraph(
           const child = node.child(i);
           if (!child) continue;
 
-          if (child.type === 'string_literal') {
+          if (child.type === 'string' || child.type === 'string_literal') {
             const pathText = sourceCode.slice(child.startIndex, child.endIndex);
             modulePath = pathText.slice(1, -1);
           } else if (child.type === 'identifier') {
@@ -147,7 +182,7 @@ export function buildDependencyGraph(
             );
             modulePath = resolvedPath;
           }
-
+          if (!identifier) identifier = collectFirstIdentifier(node);
           graph.edges.push({
             source: filePath,
             target: modulePath,
@@ -161,6 +196,19 @@ export function buildDependencyGraph(
               name: path.basename(modulePath),
               type: 'module',
             });
+          }
+        } else {
+          // Direct exports (export { a, b } or export const x) — no "from" clause
+          const ids = collectIdentifiers(node);
+          for (const id of ids) {
+            if (id) {
+              graph.edges.push({
+                source: filePath,
+                target: filePath,
+                type: 'export',
+                identifier: id,
+              });
+            }
           }
         }
       } else if (type === 'export_default_declaration') {
@@ -190,7 +238,7 @@ export function buildDependencyGraph(
           const child = node.child(i);
           if (!child) continue;
 
-          if (child.type === 'string_literal') {
+          if (child.type === 'string' || child.type === 'string_literal') {
             const pathText = sourceCode.slice(child.startIndex, child.endIndex);
             modulePath = pathText.slice(1, -1);
           }
@@ -219,6 +267,67 @@ export function buildDependencyGraph(
             });
           }
         }
+      } else if (type === 'call_expression') {
+        // require('path') — tree-sitter has no require_expression; it's call_expression
+        let callee: TSNode | null = null;
+        let args: TSNode | null = null;
+        for (let i = 0; i < node.childCount; i++) {
+          const c = node.child(i);
+          if (!c) continue;
+          if (c.type === 'identifier') callee = c;
+          else if (c.type === 'arguments') args = c;
+        }
+        if (
+          callee &&
+          sourceCode.slice(callee.startIndex, callee.endIndex) === 'require' &&
+          args
+        ) {
+          let modulePath = '';
+          for (let i = 0; i < args.childCount; i++) {
+            const a = args.child(i);
+            if (a && (a.type === 'string' || a.type === 'string_literal')) {
+              const pathText = sourceCode.slice(a.startIndex, a.endIndex);
+              modulePath = pathText.slice(1, -1);
+              break;
+            }
+          }
+          if (modulePath) {
+            graph.edges.push({
+              source: filePath,
+              target: modulePath,
+              type: 'require',
+            });
+            if (!graph.nodes.some((n) => n.path === modulePath)) {
+              graph.nodes.push({
+                path: modulePath,
+                name: path.basename(modulePath),
+                type: 'module',
+              });
+            }
+          }
+        }
+      } else if (type === 'assignment_expression') {
+        // module.exports = ...
+        const left = node.child(0);
+        if (left?.type === 'member_expression') {
+          let obj = '';
+          let prop = '';
+          for (let i = 0; i < left.childCount; i++) {
+            const c = left.child(i);
+            if (c && (c.type === 'identifier' || c.type === 'property_identifier')) {
+              const text = sourceCode.slice(c.startIndex, c.endIndex);
+              if (!obj) obj = text;
+              else prop = text;
+            }
+          }
+          if (obj === 'module' && prop === 'exports') {
+            graph.edges.push({
+              source: filePath,
+              target: filePath,
+              type: 'export',
+            });
+          }
+        }
       }
     }
 
@@ -229,5 +338,14 @@ export function buildDependencyGraph(
   }
 
   walk(tree.rootNode as TSNode);
+
+  if (graph.edges.length > 0 && !graph.nodes.some((n) => n.path === filePath)) {
+    graph.nodes.push({
+      path: filePath,
+      name: path.basename(filePath),
+      type: 'file',
+    });
+  }
+
   return graph;
 }

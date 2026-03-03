@@ -7,7 +7,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["bun-types"],
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "~/*": ["src/*"]

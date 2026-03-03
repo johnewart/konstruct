@@ -15,10 +15,12 @@
  */
 
 import 'dotenv/config';
-import { Elysia } from 'elysia';
+import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Readable } from 'stream';
+import { WebSocketServer } from 'ws';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
-import path from 'path';
-import { existsSync } from 'fs';
 import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import * as documentStore from '../shared/documentStore';
@@ -27,6 +29,7 @@ import { createLogger } from '../shared/logger';
 
 const log = createLogger('server');
 
+const PORT = 3001;
 const distPath = path.join(process.cwd(), 'dist');
 const TRPC_ENDPOINT = '/trpc';
 
@@ -46,107 +49,199 @@ async function trpcHandler(request: Request, params: { '*'?: string }) {
   });
 }
 
-const app = new Elysia()
-  .onRequest(({ request }) => {
-    const pathname = new URL(request.url).pathname;
-    if (!pathname.startsWith('/trpc')) log.debug(request.method, pathname);
-  })
-  .get(`${TRPC_ENDPOINT}/*`, async ({ request, params }) =>
-    trpcHandler(request, params)
-  )
-  .post(`${TRPC_ENDPOINT}/*`, async ({ request, params }) =>
-    trpcHandler(request, params)
-  )
-  .post('/api/doc', async ({ request, set }) => {
+/** Build a web Request from Node's IncomingMessage. */
+function toRequest(req: http.IncomingMessage, url: string): Request {
+  const method = req.method ?? 'GET';
+  const body =
+    method !== 'GET' && method !== 'HEAD' && req.readable
+      ? (Readable.toWeb(req) as ReadableStream<Uint8Array>)
+      : undefined;
+  return new Request(url, {
+    method,
+    headers: req.headers as HeadersInit,
+    body,
+    duplex: 'half',
+  });
+}
+
+/** Write a web Response to Node's ServerResponse. */
+function writeResponse(res: http.ServerResponse, response: Response): void {
+  res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+  if (response.body) {
+    const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
+    nodeStream.pipe(res);
+  } else {
+    res.end();
+  }
+}
+
+async function handleRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL
+): Promise<void> {
+  const pathname = url.pathname;
+
+  if (!pathname.startsWith('/trpc')) log.debug(req.method, pathname);
+
+  // tRPC
+  if (pathname.startsWith(TRPC_ENDPOINT) && (req.method === 'GET' || req.method === 'POST')) {
+    const procedurePath = pathname.slice(TRPC_ENDPOINT.length).replace(/^\//, '') || undefined;
+    const request = toRequest(req, url.toString());
+    const response = await trpcHandler(request, { '*': procedurePath });
+    writeResponse(res, response);
+    return;
+  }
+
+  // POST /api/doc
+  if (pathname === '/api/doc' && req.method === 'POST') {
     try {
-      const b = (await request.json()) as {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const b = JSON.parse(Buffer.concat(chunks).toString()) as {
         title?: string;
         content?: string;
         type?: string;
       };
       if (!b?.title || !b?.content) {
-        set.status = 400;
-        return { error: 'Title and content are required' };
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Title and content are required' }));
+        return;
       }
       const doc = documentStore.addDocument({
         title: b.title,
         content: b.content,
         type: (b.type as 'plan' | 'design' | 'generic') || 'generic',
       });
-      set.status = 200;
-      return { success: true, id: doc.id, url: `/doc/${doc.id}` };
-    } catch (e) {
-      set.status = 400;
-      return { error: 'Invalid JSON' };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, id: doc.id, url: `/doc/${doc.id}` }));
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON' }));
     }
-  })
-  .get('/api/docs', () => documentStore.listDocuments())
-  .get('/assets/*', ({ params }) => {
-    const filePath = path.join(distPath, 'assets', params['*'] ?? '');
-    if (existsSync(filePath)) {
-      return Bun.file(filePath);
+    return;
+  }
+
+  // GET /api/docs
+  if (pathname === '/api/docs' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(documentStore.listDocuments()));
+    return;
+  }
+
+  // GET /assets/*
+  if (pathname.startsWith('/assets/') && req.method === 'GET') {
+    const assetPath = pathname.slice('/assets/'.length);
+    const filePath = path.join(distPath, 'assets', assetPath);
+    const resolved = path.resolve(filePath);
+    const assetsDir = path.resolve(path.join(distPath, 'assets'));
+    if (resolved.startsWith(assetsDir) && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+      const content = fs.readFileSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const types: Record<string, string> = {
+        '.js': 'application/javascript',
+        '.css': 'text/css',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.ico': 'image/x-icon',
+        '.svg': 'image/svg+xml',
+        '.woff2': 'font/woff2',
+      };
+      res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream' });
+      res.end(content);
+    } else {
+      res.writeHead(404);
+      res.end();
     }
-    return new Response('Not Found', { status: 404 });
-  })
-  .ws('/agent-stream', {
-    open(ws) {
-      (ws.raw as { data?: { role?: string; sessionId?: string } }).data = {};
-    },
-    message(ws, message) {
-      const raw = ws.raw as {
+    return;
+  }
+
+  // SPA fallback: GET * (exclude /trpc, /api)
+  if (req.method === 'GET' && !pathname.startsWith('/trpc') && !pathname.startsWith('/api')) {
+    const indexHtml = path.join(distPath, 'index.html');
+    if (fs.existsSync(indexHtml)) {
+      const html = fs.readFileSync(indexHtml, 'utf-8');
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(html);
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+    return;
+  }
+
+  res.writeHead(404);
+  res.end();
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+  handleRequest(req, res, url).catch((err) => {
+    log.error('request error', err);
+    if (!res.headersSent) {
+      res.writeHead(500);
+      res.end();
+    }
+  });
+});
+
+// WebSocket /agent-stream
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url ?? '/', `http://localhost:${PORT}`).pathname;
+  if (pathname !== '/agent-stream') {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    (ws as unknown as { data?: { role?: string; sessionId?: string } }).data = {};
+    wss.emit('connection', ws, request);
+
+    ws.on('message', (raw: Buffer | string) => {
+      const rawObj = ws as unknown as {
         data?: { role?: string; sessionId?: string };
         send: (s: string) => void;
         readyState: number;
       };
       let data: unknown;
       try {
-        data = typeof message === 'string' ? JSON.parse(message) : message;
+        data = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(raw.toString());
       } catch {
         return;
       }
       if (!data || typeof data !== 'object') return;
       const obj = data as Record<string, unknown>;
       if (obj.role === 'worker') {
-        raw.data = raw.data ?? {};
-        raw.data.role = 'worker';
-        agentStream.setWorker(raw);
+        rawObj.data = rawObj.data ?? {};
+        rawObj.data.role = 'worker';
+        agentStream.setWorker(rawObj);
         return;
       }
       if (obj.type === 'subscribe' && typeof obj.sessionId === 'string') {
-        raw.data = raw.data ?? {};
-        raw.data.sessionId = obj.sessionId;
-        agentStream.addSubscriber(obj.sessionId, raw);
+        rawObj.data = rawObj.data ?? {};
+        rawObj.data.sessionId = obj.sessionId;
+        agentStream.addSubscriber(obj.sessionId, rawObj);
         return;
       }
-      if (raw.data?.role === 'worker' && typeof obj.sessionId === 'string') {
+      if (rawObj.data?.role === 'worker' && typeof obj.sessionId === 'string') {
         agentStream.broadcastToSession(obj.sessionId, JSON.stringify(obj));
       }
-    },
-    close(ws) {
-      const raw = ws.raw as {
+    });
+
+    ws.on('close', () => {
+      const rawObj = ws as unknown as {
         data?: { role?: string; sessionId?: string };
         send: (s: string) => void;
         readyState: number;
       };
-      agentStream.clearWorker(raw);
-      if (raw.data?.sessionId) {
-        agentStream.removeSubscriber(raw.data.sessionId, raw);
+      agentStream.clearWorker(rawObj);
+      if (rawObj.data?.sessionId) {
+        agentStream.removeSubscriber(rawObj.data.sessionId, rawObj);
       }
-    },
-  })
-  .get('*', ({ request }) => {
-    const url = new URL(request.url);
-    if (url.pathname.startsWith('/trpc') || url.pathname.startsWith('/api')) {
-      return new Response('Not Found', { status: 404 });
-    }
-    const indexHtml = path.join(distPath, 'index.html');
-    if (existsSync(indexHtml)) {
-      return new Response(Bun.file(indexHtml), {
-        headers: { 'Content-Type': 'text/html' },
-      });
-    }
-    return new Response('Not Found', { status: 404 });
-  })
-  .listen(3001);
+    });
+  });
+});
 
-log.info('Server running', `http://localhost:${app.server?.port}`);
+server.listen(PORT, () => {
+  log.info('Server running', `http://localhost:${PORT}`);
+});
