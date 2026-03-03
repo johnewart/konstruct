@@ -1,14 +1,14 @@
-"/*
+/*
  * Copyright 2026 John Ewart <john@johnewart.net>
  *
- * Licensed under the Apache License, Version 2.0 (the \"License\");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an \"AS IS\" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -17,8 +17,9 @@
 import { GitDiffFile, CodeReviewComment, AssistantResponse, CodeReviewSession, FinalImplementationPlan, SuggestedChange } from '../models/codeReviewModels';
 import { getGitDiff, getGitRepoPath, isGitRepository } from '../git';
 import { v4 as uuidv4 } from 'uuid';
-import { ResponseHandler } from './responseHandler';
-import { DiffLoader } from './diffLoader';
+import { ResponseHandler } from './reviewSession/responseHandler';
+import { DiffLoader } from './reviewSession/diffLoader';
+import { execSync } from 'child_process';
 
 /**
  * Manages the state of a code review session
@@ -75,6 +76,41 @@ export class ReviewSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error('Session not found');
+    }
+
+    // Validate that the file exists in the diff
+    const fileInDiff = session.diffFiles.some(file => file.path === fileId);
+    if (!fileInDiff) {
+      throw new Error('File not found in diff');
+    }
+
+    // Validate that the line number is within a valid range of any hunk
+    const file = session.diffFiles.find(file => file.path === fileId);
+    if (file) {
+      let isValidLine = false;
+      
+      for (const hunk of file.hunks) {
+        // Parse the hunk header to get the start line and number of lines
+        // Example: @@ -1,5 +1,5 @@
+        const headerMatch = hunk.header.match(/@@ -\d+,\d+ \+(\d+),\d+ @@/);
+        if (headerMatch) {
+          const startLine = parseInt(headerMatch[1], 10);
+          
+          // Count the number of added lines in this hunk
+          const addedLines = hunk.lines.filter(line => line.type === 'added').length;
+          const endLine = startLine + addedLines;
+          
+          // Check if the line number falls within this range
+          if (lineNumber >= startLine && lineNumber < endLine) {
+            isValidLine = true;
+            break;
+          }
+        }
+      }
+      
+      if (!isValidLine) {
+        throw new Error('Line number not within valid range of diff');
+      }
     }
 
     const comment: CodeReviewComment = {
@@ -275,6 +311,11 @@ export class ReviewSessionManager {
       throw new Error('Session not found');
     }
 
+    // Only generate plan when status is 'ready-for-plan'
+    if (session.status !== 'ready-for-plan') {
+      throw new Error('Session status must be "ready-for-plan" to generate a final plan');
+    }
+
     // Extract all approved changes from responses
     const changes: FinalImplementationPlan['changes'] = [];
     
@@ -431,8 +472,20 @@ export class ReviewSessionManager {
     // Simulated response based on the example in the plan
     return "I noticed the code uses var instead of let/const. Consider using let for mutable variables and const for constants.\n\nSuggested change to src/utils/config.ts:\n---\n@@ -5,7 +5,7 @@\n var config = {\n-  timeout: 5000\n+  timeout: 10000\n }\n---";
   }
+
+  /**
+   * Delete a session
+   */
+  public deleteSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    
+    this.sessions.delete(sessionId);
+    return true;
+  }
 }
 
 // Create a singleton instance
 export const reviewSessionManager = new ReviewSessionManager();
-"

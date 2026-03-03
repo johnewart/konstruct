@@ -19,34 +19,19 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-
-// Mock the tunnel service
-vi.mock('./tunnel', () => ({
-  createTunnel: (agentId: string, provider: string) => ({
-    success: true,
-    tunnelId: `tunnel-${crypto.randomUUID()}`,
-  }),
-  connectTunnel: (tunnelId: string, ws: any) => ({
-    success: true,
-  }),
-  sendToTunnel: (tunnelId: string, message: any) => ({
-    success: true,
-  }),
-  disconnectTunnel: (tunnelId: string) => {
-    // No-op
-  },
-  getTunnel: (tunnelId: string) => ({
-    id: tunnelId,
-  }),
-  listActiveTunnels: () => [],
-  cleanupExpiredTunnels: () => 0,
-}));
+import {
+  createTunnel,
+  connectTunnel,
+  sendToTunnel,
+  disconnectTunnel,
+  getTunnel,
+  listActiveTunnels,
+  cleanupExpiredTunnels,
+} from './tunnel';
 
 describe('Tunnel Service', () => {
   describe('createTunnel', () => {
-    it('should create a new tunnel with unique ID', async () => {
-      const { createTunnel } = await import('./tunnel');
-      
+    it('should create a new tunnel with unique ID', () => {
       const result1 = createTunnel('agent-1', 'docker');
       const result2 = createTunnel('agent-2', 'docker');
       
@@ -57,9 +42,7 @@ describe('Tunnel Service', () => {
   });
 
   describe('connectTunnel', () => {
-    it('should connect a WebSocket to a tunnel', async () => {
-      const { createTunnel, connectTunnel } = await import('./tunnel');
-      
+    it('should connect a WebSocket to a tunnel', () => {
       const tunnelResult = createTunnel('agent-1', 'docker');
       expect(tunnelResult.success).toBe(true);
       
@@ -76,9 +59,7 @@ describe('Tunnel Service', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should return error for unknown tunnel', async () => {
-      const { connectTunnel } = await import('./tunnel');
-      
+    it('should return error for unknown tunnel', () => {
       // Mock WebSocket
       const mockWs = {
         on: vi.fn(),
@@ -95,9 +76,7 @@ describe('Tunnel Service', () => {
   });
 
   describe('sendToTunnel', () => {
-    it('should send message through connected tunnel', async () => {
-      const { createTunnel, connectTunnel, sendToTunnel } = await import('./tunnel');
-      
+    it('should send message through connected tunnel', () => {
       const tunnelResult = createTunnel('agent-1', 'docker');
       
       // Mock WebSocket
@@ -115,31 +94,16 @@ describe('Tunnel Service', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should return error for disconnected tunnel', async () => {
-      const { createTunnel, sendToTunnel } = await import('./tunnel');
-      
+    it('should return error for disconnected tunnel', () => {
       const tunnelResult = createTunnel('agent-1', 'docker');
-      
-      // Mock closed WebSocket
-      const mockWs = {
-        on: vi.fn(),
-        send: vi.fn(),
-        close: vi.fn(),
-        readyState: 3, // CLOSED
-      };
-      
-      connectTunnel(tunnelResult.tunnelId!, mockWs as any);
-      
+      // Don't connect a WebSocket, so sendToTunnel should fail
       const result = sendToTunnel(tunnelResult.tunnelId!, { type: 'test' });
-      
       expect(result.success).toBe(false);
     });
   });
 
   describe('disconnectTunnel', () => {
-    it('should remove tunnel from active sessions', async () => {
-      const { createTunnel, disconnectTunnel, getTunnel } = await import('./tunnel');
-      
+    it('should remove tunnel from active sessions', () => {
       const tunnelResult = createTunnel('agent-1', 'docker');
       expect(getTunnel(tunnelResult.tunnelId!)).toBeDefined();
       
@@ -149,22 +113,19 @@ describe('Tunnel Service', () => {
   });
 
   describe('listActiveTunnels', () => {
-    it('should list all active tunnels', async () => {
-      const { createTunnel, listActiveTunnels } = await import('./tunnel');
-      
-      createTunnel('agent-1', 'docker');
-      createTunnel('agent-2', 'aws');
-      
+    it('should list all active tunnels', () => {
+      const r1 = createTunnel('agent-1', 'docker');
+      const r2 = createTunnel('agent-2', 'aws');
       const tunnels = listActiveTunnels();
-      
-      expect(tunnels.length).toBe(2);
+      expect(tunnels.length).toBeGreaterThanOrEqual(2);
+      const ids = tunnels.map((t) => t.id);
+      expect(ids).toContain(r1.tunnelId);
+      expect(ids).toContain(r2.tunnelId);
     });
   });
 
   describe('cleanupExpiredTunnels', () => {
-    it('should remove tunnels older than 1 hour', async () => {
-      const { createTunnel, cleanupExpiredTunnels } = await import('./tunnel');
-      
+    it('should remove tunnels older than 1 hour', () => {
       // Create a tunnel (current time)
       createTunnel('agent-1', 'docker');
       

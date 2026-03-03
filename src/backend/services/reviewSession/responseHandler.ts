@@ -50,62 +50,124 @@ Respond with:
   }
 
   static parseLLMResponse(raw: string): AssistantResponse[] {
-    // Split into responses by comment reference or line breaks
-    // For simplicity, assume one response per comment or overall response
-    // In future: use structured output (JSON) from LLM
-
-    // Simple heuristic: if line starts with "Suggested change", extract hunk
-    const lines = raw.split('\n');
-    const responses: AssistantResponse[] = [];
-    let currentResponse: AssistantResponse | null = null;
-
-    for (const line of lines) {
-      if (line.startsWith('Suggested change to')) {
-        // Extract path and hunk
-        const pathMatch = line.match(/Suggested change to (.+):/);
-        if (pathMatch && currentResponse) {
-          const path = pathMatch[1].trim();
-          // Collect hunk lines until next suggestion or end
-          const hunkLines: string[] = [];
-          let nextLine = lines.shift();
-          while (nextLine && (nextLine.startsWith('+') || nextLine.startsWith('-') || nextLine.startsWith('@@'))) {
-            hunkLines.push(nextLine);
-            nextLine = lines.shift();
-          }
-          currentResponse.suggestedChanges = currentResponse.suggestedChanges || [];
-          currentResponse.suggestedChanges.push({
-            path,
-            hunk: hunkLines.join('\n'),
-            explanation: line,
-          });
-        }
-      } else if (line.startsWith('Response to') || line.trim().length > 5) {
-        if (!currentResponse) {
-          currentResponse = {
-            id: crypto.randomUUID(),
-            commentIds: [],
-            type: 'suggestion',
-            content: line,
-            createdAt: new Date(),
-          };
-          responses.push(currentResponse);
-        } else {
-          currentResponse.content += '\n' + line;
-        }
-      }
+    // Handle empty response
+    if (!raw || raw.trim().length === 0) {
+      return [];
     }
 
-    // Fallback: if no structured response, treat entire output as one
+    const responses: AssistantResponse[] = [];
+    
+    // Split the raw response into sections based on 'Response to' and 'Suggested change to'
+    // We'll use a state machine approach to parse
+    const lines = raw.split('\n');
+    let currentResponse: AssistantResponse | null = null;
+    let currentSuggestedChange: SuggestedChange | null = null;
+    let inHunk = false;
+    let hunkLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check for 'Suggested change to' pattern
+      if (line.startsWith('Suggested change to')) {
+        // If we were already collecting a hunk, save it
+        if (currentSuggestedChange && hunkLines.length > 0) {
+          currentSuggestedChange.hunk = hunkLines.join('\n');
+          currentResponse.suggestedChanges = currentResponse.suggestedChanges || [];
+          currentResponse.suggestedChanges.push(currentSuggestedChange);
+          currentSuggestedChange = null;
+          hunkLines = [];
+        }
+        
+        // Extract the file path
+        const pathMatch = line.match(/Suggested change to (.+):/);
+        if (pathMatch) {
+          const path = pathMatch[1].trim();
+          
+          // Create a new suggested change
+          currentSuggestedChange = {
+            path,
+            hunk: '',
+            explanation: line
+          };
+          
+          // Look for the next line which should be '---'
+          if (i + 1 < lines.length && lines[i + 1].trim() === '---') {
+            i++; // Skip the '---' line
+            inHunk = true;
+          }
+        }
+      }
+      
+      // Check for 'Response to' pattern
+      else if (line.startsWith('Response to')) {
+        // If we were collecting a hunk, save it before starting a new response
+        if (currentSuggestedChange && hunkLines.length > 0) {
+          currentSuggestedChange.hunk = hunkLines.join('\n');
+          currentResponse.suggestedChanges = currentResponse.suggestedChanges || [];
+          currentResponse.suggestedChanges.push(currentSuggestedChange);
+          currentSuggestedChange = null;
+          hunkLines = [];
+        }
+        
+        // Start a new response
+        currentResponse = {
+          id: crypto.randomUUID(),
+          commentIds: [],
+          type: 'suggestion',
+          content: line,
+          createdAt: new Date()
+        };
+        responses.push(currentResponse);
+        inHunk = false;
+      }
+      
+      // Handle hunk lines (diff format)
+      else if (inHunk) {
+        // End of hunk when we hit another '---' or a new section
+        if (line.trim() === '---') {
+          // Save the hunk
+          currentSuggestedChange.hunk = hunkLines.join('\n');
+          currentResponse.suggestedChanges = currentResponse.suggestedChanges || [];
+          currentResponse.suggestedChanges.push(currentSuggestedChange);
+          currentSuggestedChange = null;
+          hunkLines = [];
+          inHunk = false;
+        } else {
+          hunkLines.push(line);
+        }
+      }
+      
+      // Handle continuation of response text
+      else if (currentResponse) {
+        // Skip empty lines if this is the first line of content
+        if (currentResponse.content === line && line.trim().length === 0) {
+          continue;
+        }
+        
+        // Add line to response content
+        currentResponse.content += '\n' + line;
+      }
+    }
+    
+    // Handle any remaining hunk
+    if (currentSuggestedChange && hunkLines.length > 0) {
+      currentSuggestedChange.hunk = hunkLines.join('\n');
+      currentResponse.suggestedChanges = currentResponse.suggestedChanges || [];
+      currentResponse.suggestedChanges.push(currentSuggestedChange);
+    }
+    
+    // If no responses were created but we have content, create one
     if (responses.length === 0 && raw.trim().length > 0) {
-      return [{
+      responses.push({
         id: crypto.randomUUID(),
         commentIds: [],
         type: 'suggestion',
         content: raw,
-        createdAt: new Date(),
-      }];
+        createdAt: new Date()
+      });
     }
-
+    
     return responses;
   }
 }

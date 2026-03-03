@@ -1,15 +1,5 @@
-import * as sessionStore from '../shared/sessionStore';
+import * as sessionStore from '../../shared/sessionStore';
 import { analyzeConversationPattern } from '../supervisor';
-
-// Mock sessionStore
-jest.mock('../shared/sessionStore', () => ({
-  ...jest.requireActual('../shared/sessionStore'),
-  sessionStore: {
-    addMessage: jest.fn(),
-    getSession: jest.fn(),
-    updateSessionMessages: jest.fn(),
-  },
-}));
 
 // Helper: create a message
 function createMessage(
@@ -38,11 +28,7 @@ function createToolCall(name: string, args: Record<string, any>): any {
 }
 
 describe('supervisor', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  test('should suggest when reading same file 5+ times with small ranges', () => {
+  it('should suggest when reading same file 5+ times with small ranges', () => {
     const messages: sessionStore.ChatMessage[] = [];
     for (let i = 0; i < 5; i++) {
       messages.push(
@@ -64,7 +50,7 @@ describe('supervisor', () => {
     expect(result.intervention).toBeUndefined();
   });
 
-  test('should suggest when no progress after many steps', () => {
+  it('should suggest when no progress after many steps', () => {
     const messages: sessionStore.ChatMessage[] = [];
     for (let i = 0; i < 20; i++) {
       messages.push(
@@ -85,7 +71,7 @@ describe('supervisor', () => {
     expect(result.intervention).toBeUndefined();
   });
 
-  test('should intervene when dangerous command detected', () => {
+  it('should intervene when dangerous command detected', () => {
     const messages: sessionStore.ChatMessage[] = [
       createMessage('assistant', 'I will now delete all files with: `rm -rf /`'),
     ];
@@ -96,7 +82,7 @@ describe('supervisor', () => {
     expect(result.suggestion).toBeUndefined();
   });
 
-  test('should suggest when file not found error repeated 3+ times', () => {
+  it('should suggest when file not found error repeated 3+ times', () => {
     const messages: sessionStore.ChatMessage[] = [];
     for (let i = 0; i < 3; i++) {
       messages.push(
@@ -111,7 +97,7 @@ describe('supervisor', () => {
     expect(result.intervention).toBeUndefined();
   });
 
-  test('should not trigger when normal conversation with file changes', () => {
+  it('should not trigger when normal conversation with file changes', () => {
     const messages: sessionStore.ChatMessage[] = [
       createMessage('assistant', '', [
         createToolCall('read_file_region', {
@@ -140,9 +126,9 @@ describe('supervisor', () => {
     expect(result.intervention).toBeUndefined();
   });
 
-  test('should not trigger on first 10 messages (threshold)', () => {
+  it('should not trigger on first 4 messages (below threshold of 5)', () => {
     const messages: sessionStore.ChatMessage[] = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 4; i++) {
       messages.push(
         createMessage('assistant', '', [
           createToolCall('read_file_region', {

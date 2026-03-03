@@ -1,5 +1,5 @@
-import { CodeReviewSession } from '../models/codeReviewModels';
-import { getGitDiff } from '../git';
+import { CodeReviewSession } from '../../models/codeReviewModels';
+import { getGitDiff } from '../../git';
 
 export class DiffLoader {
   static async loadForSession(session: CodeReviewSession): Promise<CodeReviewSession['diffFiles']> {
