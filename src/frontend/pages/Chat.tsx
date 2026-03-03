@@ -1534,20 +1534,20 @@ export function Chat() {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleTextareaKeyDown}
-                    placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+                    placeholder={isRunInProgress ? "Type a message… (Queueing while agent is working)" : "Type a message… (Enter to send, Shift+Enter for new line)"}
                     minRows={2}
                     maxRows={6}
                     autosize
-                    disabled={isRunInProgress}
+                    disabled={false}
                     styles={{
-                      root: { flex: 1, minHeight: 60 },
+                      root: { flex: 1, minHeight: 60, opacity: isRunInProgress ? 0.8 : 1 },
                       input: { fontFamily: 'inherit' },
                     }}
                   />
                   <div className="chat-form__actions">
                     <Button
                       type="submit"
-                      disabled={isRunInProgress || !input.trim()}
+                      disabled={!input.trim()}
                       loading={sendMessage.isPending}
                     >
                       {sendMessage.isPending ? 'Sending…' : 'Send'}
