@@ -204,6 +204,23 @@ const ALL_TOOL_DEFS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'getGitDiff',
+      description: 'Get line-by-line git diff of all changed files in the repository. Returns structured diff with line numbers and types (add/remove/context).',
+      parameters: {
+        type: 'object',
+        properties: {
+          repoPath: {
+            type: 'string',
+            description: 'Path to git repository (default: project root)',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_plan',
       description: 'Create a plan file in .konstruct/plans directory.',
       parameters: {

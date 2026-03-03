@@ -1,14 +1,14 @@
 /*
  * Copyright 2026 John Ewart <john@johnewart.net>
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Apache License, Version 2.0 (the \"License\");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
+ * distributed under the License is distributed on an \"AS IS\" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -26,6 +26,33 @@ export interface GitFileChange {
 
 // Export type alias for convenience
 export type GitStatus = 'M' | 'A' | 'D' | 'R' | 'C' | '??';
+
+/**
+ * Represents a single file with line-by-line changes from git diff
+ */
+export interface GitDiffFile {
+  path: string;          // Relative path from repo root
+  status: 'M' | 'A' | 'D' | 'R' | 'C' | '??'; // git status code
+  hunks: GitDiffHunk[];  // List of change blocks
+}
+
+/**
+ * Represents a block of changed lines in a file
+ */
+export interface GitDiffHunk {
+  header: string;        // e.g. "@@ -10,7 +10,8 @@"
+  lines: GitDiffLine[];  // Each line in the hunk
+}
+
+/**
+ * Represents a single line in a git diff
+ */
+export interface GitDiffLine {
+  type: 'context' | 'add' | 'remove'; // Line type in diff
+  content: string;                    // Raw line content
+  lineNumber: number;                 // Line number in target (post-change) file
+  oldLineNumber?: number;             // Line number in source (pre-change) file (for 'add' and 'context')
+}
 
 /**
  * Check if git is available in the system PATH
@@ -96,7 +123,7 @@ export function getChangedFiles(repoPath: string): GitFileChange[] {
       // Or "??" for untracked files
       
       // Match format: optional space, then 2 status chars, then space, then path
-      const match = line.match(/^(\s?)(.)(.)\s+(.+)$/);
+      const match = line.match(/^\s?(.)(.)\s+(.+)$/);
       if (!match) continue;
 
       // Match groups:
@@ -307,4 +334,120 @@ export function getComprehensiveDiffStats(
   }
 
   return stats;
+}
+
+/**
+ * Extract line numbers from git diff hunk header
+ * @param header Example: "@@ -10,7 +10,8 @@"
+ * @param isTarget true for target (new) file line number, false for source (old) file
+ * @returns The line number in the specified file
+ */
+function getLineNumFromHunkHeader(header: string, isTarget: boolean): number {
+  if (isTarget) {
+    // Pattern for target (new) file: @@ -a,b +c,d @@
+    const match = header.match(/@@ -\d+,\d+ \+(\d+),\d+ @@/);
+    if (match) return parseInt(match[1], 10);
+  } else {
+    // Pattern for source (old) file: @@ -a,b +c,d @@
+    const match = header.match(/@@ -(\d+),\d+ \+\d+,\d+ @@/);
+    if (match) return parseInt(match[1], 10);
+  }
+  // Default fallback
+  return 1;
+}
+
+/**
+ * Get line-by-line git diff of all changed files in the repository
+ * Returns structured diff with line numbers and types (add/remove/context)
+ */
+export function getGitDiff(repoPath: string = '.'): GitDiffFile[] {
+  if (!isGitRepository(repoPath)) {
+    return [];
+  }
+
+  try {
+    // Get list of changed files
+    const statusOutput = execSync('git status --porcelain=v1', {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    });
+
+    const changedFiles: GitDiffFile[] = [];
+
+    for (const line of statusOutput.split('\n')) {
+      if (!line.trim()) continue;
+      const match = line.match(/^([AMDR?C])\s+(.+)$/);
+      if (!match) continue;
+
+      const status = match[1] as GitStatus;
+      const filePath = match[2];
+
+      // Get unified diff for this file
+      const diffOutput = execSync(`git diff -U10 --no-color -- "${filePath}"`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      });
+
+      const hunks: GitDiffHunk[] = [];
+      const lines = diffOutput.split('\n');
+
+      let currentHunk: GitDiffHunk | null = null;
+
+      for (const line of lines) {
+        if (line.startsWith('@@')) {
+          // Start of new hunk
+          currentHunk = { header: line, lines: [] };
+          hunks.push(currentHunk);
+        } else if (currentHunk) {
+          if (line.startsWith('+')) {
+            // Added line (target file)
+            const lineNumber = getLineNumFromHunkHeader(currentHunk.header, true);
+            currentHunk.lines.push({
+              type: 'add',
+              content: line.substring(1),
+              lineNumber,
+            });
+            // Update line number for next line
+            currentHunk.lines[currentHunk.lines.length - 1].lineNumber++;
+          } else if (line.startsWith('-')) {
+            // Removed line (source file)
+            const lineNumber = getLineNumFromHunkHeader(currentHunk.header, false);
+            currentHunk.lines.push({
+              type: 'remove',
+              content: line.substring(1),
+              lineNumber,
+              oldLineNumber: lineNumber,
+            });
+            // Update line number for next line
+            currentHunk.lines[currentHunk.lines.length - 1].oldLineNumber++;
+          } else if (line.startsWith(' ')) {
+            // Context line
+            const targetLineNum = getLineNumFromHunkHeader(currentHunk.header, true);
+            const sourceLineNum = getLineNumFromHunkHeader(currentHunk.header, false);
+            currentHunk.lines.push({
+              type: 'context',
+              content: line.substring(1),
+              lineNumber: targetLineNum,
+              oldLineNumber: sourceLineNum,
+            });
+            // Update line numbers for next line
+            currentHunk.lines[currentHunk.lines.length - 1].lineNumber++;
+            currentHunk.lines[currentHunk.lines.length - 1].oldLineNumber++;
+          }
+          // Ignore other lines like \ No newline at end of file
+        }
+      }
+
+      changedFiles.push({
+        path: filePath,
+        status,
+        hunks,
+      });
+    }
+
+    return changedFiles;
+  } catch (error) {
+    console.error('Error getting git diff:', error);
+    return [];
+  }
 }
