@@ -43,7 +43,7 @@ function isSafeRuleName(name: string): boolean {
  * If the file has an H1 header, use that (removing "Plan:" prefix)
  * Otherwise, title-case the filename without extension
  */
-function getPlanDisplayLabel(name: string, content?: string): string {
+export function getPlanDisplayLabel(name: string, content?: string): string {
   // Remove file extension if present
   const baseName = name.replace(/\.(md|markdown|plan|konstruct)$/, '');
   
@@ -66,13 +66,13 @@ function getPlanDisplayLabel(name: string, content?: string): string {
  * Convert a string to title case
  * Handles common acronyms like CLI, API, etc.
  */
-function titleCase(str: string): string {
+export function titleCase(str: string): string {
   const acronyms = ['cli', 'api', 'ui', 'id', 'url', 'html', 'css', 'json', 'xml'];
   
   return str
-    .split(/[_-]/)
+    .split(/[\s_-]+/)  // Split by spaces, underscores, or hyphens
+    .filter(word => word.length > 0)
     .map(word => {
-      if (word.length === 0) return word;
       const lowerWord = word.toLowerCase();
       // If it's a known acronym, keep it uppercase
       if (acronyms.includes(lowerWord)) {
@@ -143,7 +143,7 @@ export const chatRouter = router({
           label: getPlanDisplayLabel(e.name, content)
         };
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.label.localeCompare(b.label));
   }),
 
   getPlanContent: publicProcedure
