@@ -38,6 +38,52 @@ function isSafeRuleName(name: string): boolean {
   );
 }
 
+/**
+ * Convert a filename to a title-cased label
+ * If the file has an H1 header, use that (removing "Plan:" prefix)
+ * Otherwise, title-case the filename without extension
+ */
+function getPlanDisplayLabel(name: string, content?: string): string {
+  // Remove file extension if present
+  const baseName = name.replace(/\.(md|markdown|plan|konstruct)$/, '');
+  
+  // Try to extract H1 header from content if provided
+  if (content) {
+    const h1Match = content.match(/^#\s+(.*)$/m);
+    if (h1Match) {
+      let title = h1Match[1].trim();
+      // Remove "Plan:" or "Plan" prefix
+      title = title.replace(/^Plan:\s*/i, '').replace(/^Plan\s+/i, '');
+      return title;
+    }
+  }
+  
+  // Title-case the filename
+  return titleCase(baseName);
+}
+
+/**
+ * Convert a string to title case
+ * Handles common acronyms like CLI, API, etc.
+ */
+function titleCase(str: string): string {
+  const acronyms = ['cli', 'api', 'ui', 'id', 'url', 'html', 'css', 'json', 'xml'];
+  
+  return str
+    .split(/[_-]/)
+    .map(word => {
+      if (word.length === 0) return word;
+      const lowerWord = word.toLowerCase();
+      // If it's a known acronym, keep it uppercase
+      if (acronyms.includes(lowerWord)) {
+        return word.toUpperCase();
+      }
+      // Otherwise title-case the word
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
 export const chatRouter = router({
   listModes: publicProcedure.query(() => getAllModes()),
 
@@ -78,9 +124,25 @@ export const chatRouter = router({
     const dir = path.join(ctx.projectRoot, PLANS_DIR);
     if (!fs.existsSync(dir)) return [];
     const names = fs.readdirSync(dir, { withFileTypes: true });
-    return names
-      .filter((e) => e.isFile() && !e.name.startsWith('.'))
-      .map((e) => ({ name: e.name, path: `${PLANS_DIR}/${e.name}` }))
+    const filtered = names.filter((e) => e.isFile() && !e.name.startsWith('.'));
+    
+    // Map to include both name and display label
+    return filtered
+      .map((e) => {
+        const planPath = path.join(dir, e.name);
+        let content;
+        try {
+          content = fs.readFileSync(planPath, 'utf-8');
+        } catch {
+          content = undefined;
+        }
+        
+        return {
+          name: e.name,
+          path: `${PLANS_DIR}/${e.name}`,
+          label: getPlanDisplayLabel(e.name, content)
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
   }),
 

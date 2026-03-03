@@ -1098,7 +1098,7 @@ export function Chat() {
                             e.dataTransfer.effectAllowed = 'copy';
                           }}
                         >
-                          {p.name}
+                          {p.label}
                         </Button>
                       </li>
                     ))
