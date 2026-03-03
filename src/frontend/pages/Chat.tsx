@@ -232,6 +232,7 @@ export function Chat() {
   const [contextModalOpen, setContextModalOpen] = useState(false);
   const [transcriptModalOpen, setTranscriptModalOpen] = useState(false);
   const [planModalName, setPlanModalName] = useState<string | null>(null);
+  const [planFilterText, setPlanFilterText] = useState('');
   const [ruleModalName, setRuleModalName] = useState<string | null>(null);
   const [ruleEditContent, setRuleEditContent] = useState('');
   const [newRuleName, setNewRuleName] = useState('');
@@ -586,6 +587,19 @@ export function Chat() {
     );
 
   const { data: plans } = trpc.chat.listPlans.useQuery();
+  
+  // Filter plans based on search text
+  const filteredPlans = useMemo(() => {
+    if (!plans) return [];
+    if (!planFilterText.trim()) return plans;
+    
+    const searchLower = planFilterText.toLowerCase();
+    return plans.filter(p => 
+      p.label.toLowerCase().includes(searchLower) ||
+      p.name.toLowerCase().includes(searchLower)
+    );
+  }, [plans, planFilterText]);
+  
   const { data: planContent, isLoading: planContentLoading } =
     trpc.chat.getPlanContent.useQuery(
       { name: planModalName! },
@@ -1079,10 +1093,21 @@ export function Chat() {
               className="chat-sidebar__plans-panel"
               style={{ padding: '8px 0' }}
             >
+              {/* Filter input - always visible at top, outside scroll area */}
+              <div className="chat-sidebar__filter-input">
+                <TextInput
+                  placeholder="Filter plans..."
+                  value={planFilterText}
+                  onChange={(e) => setPlanFilterText(e.target.value)}
+                  size="xs"
+                  variant="filled"
+                />
+              </div>
+              
               <div className="chat-sidebar__plans-inner">
                 <ul className="chat-sidebar__list chat-sidebar__list--plans">
-                  {plans && plans.length > 0 ? (
-                    plans.map((p) => (
+                  {filteredPlans && filteredPlans.length > 0 ? (
+                    filteredPlans.map((p) => (
                       <li key={p.name}>
                         <Button
                           type="button"
@@ -1102,6 +1127,8 @@ export function Chat() {
                         </Button>
                       </li>
                     ))
+                  ) : filteredPlans && planFilterText && filteredPlans.length === 0 ? (
+                    <li className="chat-sidebar__empty">No plans match your filter</li>
                   ) : (
                     <li className="chat-sidebar__empty">No plans yet</li>
                   )}

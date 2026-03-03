@@ -165,7 +165,8 @@ export async function runAgentLoop(
       });
       
       // Fire-and-forget supervisor check every 10-15 turns
-      if (messages.length % 15 === 0) {
+      // DISABLED - causing cache invalidation issues when injecting comments
+      if (false && messages.length % 15 === 0) {
         setTimeout(() => {
           const recent = messages.slice(-50);
           const analysis = analyzeConversationPattern(recent);

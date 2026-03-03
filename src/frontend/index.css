@@ -677,17 +677,34 @@ body {
 .chat-sidebar__plans-panel {
   text-align: left;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-sidebar__filter-input {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--app-border);
+  background: transparent;
+}
+
+.chat-sidebar__filter-input input {
+  width: 100%;
+  font-size: 0.8em;
 }
 
 .chat-sidebar__plans-inner {
   min-height: 0;
   overflow-y: auto;
+  flex: 1 1 auto;
 }
 
 .chat-sidebar__plans-inner,
 .chat-sidebar__plans-inner * {
   text-align: left !important;
 }
+
+
 
 .chat-sidebar__list--plans {
   flex: 1;
