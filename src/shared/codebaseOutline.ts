@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getParser, getOutlineLoadError, SUPPORTED_EXTENSIONS } from './ast';
 import type { TSNode } from './ast';
+import { getOutlineConfig } from './parsers';
 import {
   buildDependencyGraph,
   type DependencyGraph,
@@ -34,18 +35,6 @@ import {
 
 export { getOutlineLoadError };
 export type { TSNode } from './ast';
-
-/** Node types we treat as top-level declarations (signature only). */
-const DECL_NODES = new Set([
-  'function_declaration',
-  'function_definition',
-  'method_definition',
-  'arrow_function',
-  'class_declaration',
-  'class_definition',
-  'interface_declaration',
-  'type_alias_declaration',
-]);
 
 const MAX_OUTLINE_BYTES = 48 * 1024;
 const MAX_FILES = 200;
@@ -80,15 +69,18 @@ export type { DependencyNode, DependencyEdge } from './dependencyGraph';
  */
 export function outlineFile(sourceCode: string, ext: string): OutlineEntry[] {
   const parser = getParser(ext);
-  if (!parser) return [];
+  const config = getOutlineConfig(ext);
+  if (!parser || !config) return [];
 
   const tree = parser.parse(sourceCode);
   const entries: OutlineEntry[] = [];
+  const declNodes = config.declarationNodeTypes;
+  const indentBlocks = config.indentBlockTypes ?? new Set<string>();
 
   function walk(node: TSNode | null, depth: number) {
     if (!node) return;
     const type = node.type;
-    if (DECL_NODES.has(type)) {
+    if (declNodes.has(type)) {
       const text = sourceCode.slice(node.startIndex, node.endIndex);
       const line = node.startPosition.row + 1;
       const sig = firstLineSignature(text);
@@ -99,11 +91,7 @@ export function outlineFile(sourceCode: string, ext: string): OutlineEntry[] {
       if (!child) continue;
       const childType = child.type;
       const nextDepth =
-        DECL_NODES.has(childType) ||
-        childType === 'class_body' ||
-        childType === 'statement_block'
-          ? depth + 1
-          : depth;
+        declNodes.has(childType) || indentBlocks.has(childType) ? depth + 1 : depth;
       walk(child, nextDepth);
     }
   }
