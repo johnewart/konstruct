@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { loadConfig, getProviderById } from './config';
-import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel } from './providers';
+import { loadConfig, getProviderById, resolveProviderSecret } from './config';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeCliPath } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
+import { runAgent } from '../agent/claude-cli-agent';
 import { createLogger } from './logger';
 
 const log = createLogger('llm');
@@ -90,6 +91,31 @@ export async function chat(
     log.warn('Could not load config for provider lookup', e);
   }
   const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
+  const isClaudeCli = (provider?.type?.toLowerCase() === 'claude_cli') || (providerId === 'claude_cli');
+
+  if (isClaudeCli) {
+    const claudePath = getClaudeCliPath(projectRoot, providerId);
+    const apiKey =
+      (await resolveProviderSecret(projectRoot, providerId)) ??
+      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
+      '';
+    const prompt = messages
+      .map((m) => {
+        if (m.role === 'system') return `[System]\n${m.content}`;
+        if (m.role === 'user') return `[User]\n${m.content}`;
+        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    const reply = await runAgent(prompt, {
+      claudePath,
+      cwd: projectRoot || undefined,
+      timeoutMs: 300_000,
+      env: apiKey ? { ANTHROPIC_API_KEY: apiKey } : undefined,
+    });
+    return { content: reply, toolCalls: undefined };
+  }
 
   if (providerId === 'anthropic') {
     return anthropic.chat(messages, {

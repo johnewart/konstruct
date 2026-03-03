@@ -291,7 +291,7 @@ export function Chat() {
   const { data: modes } = trpc.chat.listModes.useQuery();
   const { data: providersData } = trpc.chat.listProviders.useQuery();
   const providers = providersData?.providers ?? [];
-  const defaultProviderId = providersData?.defaultProviderId ?? 'openai';
+  const defaultProviderId = providersData?.defaultProviderId ?? '';
   const { data: defaultPodData } = trpc.runpod.getDefaultRunpodPod.useQuery(
     undefined,
     {
@@ -359,26 +359,23 @@ export function Chat() {
     [providers]
   );
   useEffect(() => {
-    if (providers.length === 0) return;
     const currentConfigured =
-      providerId != null && configuredProviders.some((p) => p.id === providerId);
+      providerId != null && providerId !== '' && configuredProviders.some((p) => p.id === providerId);
     if (currentConfigured) return;
     const next =
       defaultProviderId && configuredProviders.some((p) => p.id === defaultProviderId)
         ? defaultProviderId
-        : configuredProviders[0]?.id ?? providers[0]?.id;
-    if (next) {
-      setProviderId(next);
-      if (typeof window !== 'undefined')
-        localStorage.setItem(CHAT_PROVIDER_KEY, next);
-    }
+        : configuredProviders[0]?.id ?? providers[0]?.id ?? '';
+    setProviderId(next || null);
+    if (typeof window !== 'undefined')
+      localStorage.setItem(CHAT_PROVIDER_KEY, next || '');
   }, [providers, configuredProviders, defaultProviderId, providerId]);
   const allModelOptions = useMemo(() => {
     const list: { providerId: string; providerName: string; modelId: string; modelName: string }[] = [];
     for (const p of configuredProviders) {
       const prov = p as { defaultModel?: string; models?: { id: string; name: string }[] };
       const isRunpod = p.id === 'runpod';
-      const models =
+      let models =
         isRunpod && runpodModels.length > 0
           ? runpodModels.map((m) => ({ id: m.id, name: m.name ?? m.id }))
           : prov.models?.length
@@ -386,6 +383,9 @@ export function Chat() {
             : prov.defaultModel
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
+      if (models.length === 0) {
+        models = [{ id: p.id, name: p.name }];
+      }
       for (const m of models) {
         list.push({
           providerId: p.id,
@@ -716,7 +716,7 @@ export function Chat() {
         sessionId,
         content: buildMessageContent(text),
         modeId,
-        providerId: providerId ?? 'openai',
+        providerId: providerId ?? defaultProviderId,
         ...(providerId === 'runpod' && selectedRunpodModelId
           ? { model: selectedRunpodModelId }
           : selectedModelId
@@ -886,7 +886,7 @@ export function Chat() {
         sessionId,
         content: buildMessageContent(text),
         modeId,
-        providerId: providerId ?? 'openai',
+        providerId: providerId ?? defaultProviderId,
         ...(providerId === 'runpod' && selectedRunpodModelId
           ? { model: selectedRunpodModelId }
           : selectedModelId
@@ -1446,14 +1446,14 @@ export function Chat() {
                             >
                               {providerId && providers.length
                                 ? (() => {
-                                    const current = providers.find(
-                                      (p) => p.id === providerId
-                                    ) as { defaultModel?: string } | undefined;
-                                    const model =
+                                    const modelId =
                                       providerId === 'runpod'
-                                        ? selectedRunpodModelId ?? current?.defaultModel
-                                        : selectedModelId ?? current?.defaultModel;
-                                    return model ?? '—';
+                                        ? selectedRunpodModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel
+                                        : selectedModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel;
+                                    const opt = allModelOptions.find(
+                                      (o) => o.providerId === providerId && o.modelId === modelId
+                                    );
+                                    return opt ? opt.modelName : (modelId ?? '—');
                                   })()
                                 : '—'}
                             </span>
@@ -1820,7 +1820,7 @@ export function Chat() {
                                       msg.content
                                     ),
                                     modeId,
-                                    providerId: providerId ?? 'openai',
+                                    providerId: providerId ?? defaultProviderId,
                                     ...(providerId === 'runpod' && selectedRunpodModelId
                                       ? { model: selectedRunpodModelId }
                                       : selectedModelId

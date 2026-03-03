@@ -61,6 +61,8 @@ export type ConfigProvider = {
   aws_profile?: string;
   /** RunPod: selected pod id (provider uses this pod's proxy URL). */
   runpod_pod_id?: string;
+  /** Claude CLI: path to the claude binary (e.g. /path/to/node/bin/claude). */
+  claude_cli_path?: string;
   /** Managed list of models (name + context window) for this provider. */
   models?: ProviderModel[];
   max_tokens?: number;
@@ -209,6 +211,7 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
             endpoint: p?.endpoint != null ? String(p.endpoint) : undefined,
             aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
             runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
+            claude_cli_path: p?.claude_cli_path != null ? String(p.claude_cli_path).trim() : undefined,
             models: models?.length ? models : undefined,
             max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
             temperature: p?.temperature != null ? Number(p.temperature) : undefined,

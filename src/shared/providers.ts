@@ -28,13 +28,14 @@ export type ProviderOption = {
   name: string;
 };
 
-/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama. */
+/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama and claude_cli. */
 export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'openai', name: 'OpenAI / Vast' },
   { id: 'ollama', name: 'Ollama (local)' },
   { id: 'runpod', name: 'RunPod' },
   { id: 'anthropic', name: 'Anthropic' },
   { id: 'bedrock', name: 'AWS Bedrock' },
+  { id: 'claude_cli', name: 'Claude CLI (agent)' },
 ];
 
 function getEnv(name: string): string {
@@ -105,6 +106,22 @@ export function getBedrockEnv(
     'anthropic.claude-3-5-sonnet-v2:0';
   const aws_profile = provider?.aws_profile?.trim();
   return { region, model, ...(aws_profile ? { aws_profile } : {}) };
+}
+
+const DEFAULT_CLAUDE_CLI_PATH =
+  (typeof process !== 'undefined' && process.env?.CLAUDE_CLI_PATH) ||
+  (typeof process !== 'undefined' && process.env?.NVM_BIN ? `${process.env.NVM_BIN}/claude` : null) ||
+  'claude';
+
+/** Claude CLI: path from provider config or env (CLAUDE_CLI_PATH / NVM_BIN/claude) or "claude". */
+export function getClaudeCliPath(projectRoot: string, providerId?: string): string {
+  const c = loadConfig(projectRoot);
+  const id = (providerId ?? c.llm?.provider ?? 'claude_cli').toLowerCase();
+  const provider = getProviderById(c, id);
+  const path = provider?.claude_cli_path?.trim();
+  if (path) return path;
+  if (id === 'claude_cli') return DEFAULT_CLAUDE_CLI_PATH;
+  return DEFAULT_CLAUDE_CLI_PATH;
 }
 
 /** Bedrock: configured if AWS credentials/region available or provider has aws_profile. */
@@ -230,7 +247,7 @@ export type ProviderListItem = {
   url?: string;
 };
 
-/** Returns provider options for the current context: built-in + global custom + (when projectRoot set) project custom. */
+/** Returns provider options for the current context: only providers you have added in config (global + project). No built-in list. */
 export function getAllProviders(projectRoot: string): {
   providers: ProviderListItem[];
   defaultProviderId: string;
@@ -246,60 +263,7 @@ export function getAllProviders(projectRoot: string): {
     if (i >= 0) customProviderList[i] = p;
     else customProviderList.push(p);
   }
-  const openaiEnv = getOpenAIEnv(projectRoot);
-  const anthropicEnv = getAnthropicEnv(projectRoot);
   const runpodEnv = getRunpodEnv(projectRoot);
-  const ollamaEnv = getOllamaEnv(projectRoot);
-  const bedrockEnv = getBedrockEnv(projectRoot);
-  const builtIn: ProviderListItem[] = [
-    {
-      id: 'openai',
-      name: 'OpenAI / Vast',
-      defaultModel: openaiEnv.model,
-      models: [],
-      configured:
-        !!getEnv('OPENAI_API_KEY') ||
-        !!getVastApiKey(projectRoot) ||
-        !!getProviderById(c, 'openai')?.secret_ref?.trim() ||
-        !!getEnv('OPENAI_BASE_URL') ||
-        !!(c.llm?.base_url?.trim()),
-      url: openaiEnv.baseUrl || undefined,
-    },
-    {
-      id: 'ollama',
-      name: 'Ollama (local)',
-      defaultModel: ollamaEnv.model,
-      models: [],
-      configured: !!ollamaEnv.baseUrl,
-      url: ollamaEnv.baseUrl || undefined,
-    },
-    {
-      id: 'runpod',
-      name: 'RunPod',
-      defaultModel: runpodEnv.model || 'default',
-      models: [],
-      configured:
-        !!runpodEnv.baseUrl ||
-        !!getProviderById(c, 'runpod')?.runpod_pod_id?.trim(),
-      url: runpodEnv.baseUrl || undefined,
-    },
-    {
-      id: 'anthropic',
-      name: 'Anthropic',
-      defaultModel: anthropicEnv.model,
-      models: [],
-      configured:
-        !!getEnv('ANTHROPIC_API_KEY') ||
-        !!getProviderById(c, 'anthropic')?.secret_ref?.trim(),
-    },
-    {
-      id: 'bedrock',
-      name: 'AWS Bedrock',
-      defaultModel: bedrockEnv.model,
-      models: [],
-      configured: isBedrockConfigured(projectRoot),
-    },
-  ];
   const customProviders: ProviderListItem[] = customProviderList.map((p) => {
     const type = (p.type ?? '').toLowerCase();
     let configured = false;
@@ -313,13 +277,16 @@ export function getAllProviders(projectRoot: string): {
       configured = !!p.aws_profile?.trim() || isBedrockConfigured(projectRoot, p.id);
     } else if (type === 'runpod') {
       const podId = (p as { runpod_pod_id?: string }).runpod_pod_id?.trim();
-      configured = !!podId || !!p.secret_ref?.trim() || !!runpodEnv.baseUrl;
+      configured = !!podId || !!p.secret_ref?.trim();
       url = podId
         ? `https://${podId}-8000.proxy.runpod.net/v1`
         : runpodEnv.baseUrl || undefined;
     } else if (type === 'ollama') {
-      configured = !!ollamaEnv.baseUrl;
-      url = ollamaEnv.baseUrl || undefined;
+      configured = !!(p.base_url?.trim());
+      url = p.base_url ?? undefined;
+    } else if (type === 'claude_cli') {
+      const path = (p as { claude_cli_path?: string }).claude_cli_path?.trim();
+      configured = !!path || !!getEnv('CLAUDE_CLI_PATH');
     } else {
       configured = !!p.secret_ref?.trim();
       url = p.base_url ?? undefined;
@@ -333,13 +300,10 @@ export function getAllProviders(projectRoot: string): {
       url,
     };
   });
-  const providers = [...builtIn, ...customProviders];
+  const providers = customProviders;
   const rawProvider = (c.llm.provider ?? '').trim();
-  const isKnown =
-    rawProvider &&
-    (['anthropic', 'bedrock', 'runpod', 'ollama', 'openai'].includes(rawProvider.toLowerCase()) ||
-      getProviderById(c, rawProvider));
-  const defaultProviderId: string = isKnown ? rawProvider : 'openai';
+  const inList = providers.some((p) => (p.id ?? '').toLowerCase() === rawProvider.toLowerCase());
+  const defaultProviderId: string = inList ? rawProvider : (providers[0]?.id ?? '');
   return { providers, defaultProviderId };
 }
 
@@ -363,10 +327,9 @@ export function getContextWindowForModel(
 /** Update the default provider in the config file (project or global). */
 export function setDefaultProvider(providerId: string, projectRoot: string): void {
   const config = loadConfig(projectRoot);
-  const builtIn = ['openai', 'anthropic', 'bedrock', 'runpod', 'ollama'];
-  const isCustom = config.providers?.some((p) => p.id === providerId);
-  if (!builtIn.includes(providerId) && !isCustom) {
-    throw new Error(`Invalid provider: ${providerId}. Must be a built-in type or an existing custom provider id.`);
+  const exists = config.providers?.some((p) => (p.id ?? '').toLowerCase() === providerId.toLowerCase());
+  if (!exists) {
+    throw new Error(`Invalid provider: ${providerId}. Add the provider in LLM Providers first.`);
   }
   config.llm = config.llm ?? {};
   config.llm.provider = providerId;

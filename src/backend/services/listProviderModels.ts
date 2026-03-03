@@ -56,6 +56,9 @@ export async function listProviderModels(
   if (type === 'bedrock') {
     return listBedrock(projectRoot, providerId, provider);
   }
+  if (type === 'claude_cli') {
+    return { models: [] }; // Claude CLI uses its own model selection; no API to list
+  }
   return { models: [], error: `Listing models for type "${type}" is not supported` };
 }
 
