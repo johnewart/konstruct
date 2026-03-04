@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import * as codebaseOutline from '../../shared/codebaseOutline';
 import { buildDependencyGraph } from '../../shared/dependencyGraph';
+import { getGitRepoPath } from '../git';
 
 /** Higher limits for background full-graph build (Code Explorer). */
 const CODE_EXPLORER_MAX_FILES = 5000;
@@ -52,11 +53,34 @@ function cacheKey(projectRoot: string, pathArg: string): string {
   return `${projectRoot}|${pathArg}`;
 }
 
-/** Root path (projectRoot + pathArg) with trailing slash, normalized. Strip this from all node/edge paths before caching. */
+/** Return cached dependency graph for a path if present and not expired. Used by PR overview to get inbound deps. */
+export function getCachedDependencyGraph(
+  projectRoot: string,
+  pathArg: string = '.'
+): { nodes: Array<{ path: string }>; edges: Array<{ source: string; target: string; type: string }> } | null {
+  const key = cacheKey(projectRoot, pathArg);
+  const cached = graphCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > CACHE_TTL_MS) return null;
+  return { nodes: cached.nodes, edges: cached.edges };
+}
+
+/** Root path (projectRoot + pathArg) with trailing slash, normalized. Used as fallback when not in a git repo. */
 function getPathStripPrefix(projectRoot: string, pathArg: string): string {
   let p = path.join(projectRoot, pathArg).replace(/\\/g, '/');
   if (!p.endsWith('/')) p += '/';
   return p;
+}
+
+/** Prefer git repo root so all dependency graph paths are relative to the same root as .git. */
+function getStripPrefixForGraph(projectRoot: string, pathArg: string): string {
+  const gitRoot = getGitRepoPath(projectRoot);
+  if (gitRoot) {
+    let p = path.join(gitRoot, '').replace(/\\/g, '/');
+    if (!p.endsWith('/')) p += '/';
+    return p;
+  }
+  return getPathStripPrefix(projectRoot, pathArg);
 }
 
 /** Strip the root prefix from a path so the frontend only sees paths under the explored dir. */
@@ -81,8 +105,7 @@ export const codebaseRouter = router({
     .query(({ ctx, input }) => {
       const pathArg = input?.path?.trim() || '.';
       const key = cacheKey(ctx.projectRoot, pathArg);
-      let pathStripPrefix = path.join(ctx.projectRoot, pathArg).replace(/\\/g, '/');
-      if (!pathStripPrefix.endsWith('/')) pathStripPrefix += '/';
+      const pathStripPrefix = getStripPrefixForGraph(ctx.projectRoot, pathArg);
 
       const loadErr = codebaseOutline.getOutlineLoadError();
       if (loadErr) {
@@ -248,7 +271,7 @@ export const codebaseRouter = router({
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
-          const rootPrefix = getPathStripPrefix(projectRoot, pathArg);
+          const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
           const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
           const strippedEdges = allEdges.map((e) => ({
             source: stripRootFromPath(e.source, rootPrefix),

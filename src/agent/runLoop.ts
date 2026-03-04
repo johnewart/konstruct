@@ -127,7 +127,10 @@ export async function runAgentLoop(
     const extendedInstructions = getModeInstructions(modeId);
     if (extendedInstructions) systemPrompt = systemPrompt + '\n\n' + extendedInstructions;
     if (prContextText) {
-      systemPrompt = systemPrompt + '\n\n## Pull request context (for reference)\n\n' + prContextText;
+      systemPrompt =
+        systemPrompt +
+        '\n\n## Pull request context (for reference)\n\nThe following is the **proposed** PR (diff). Added (A) files are not in the repo yet; their content is only in this section.\n\n' +
+        prContextText;
     }
     const tools = getToolsForMode(modeId);
     log.debug(

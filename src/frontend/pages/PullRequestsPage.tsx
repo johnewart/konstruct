@@ -18,11 +18,14 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Accordion,
+  Badge,
   Box,
+  Button,
   Loader,
-  ScrollArea,
+  List,
   Text,
   Title,
+  Tabs,
   Alert,
   Stack,
   Group,
@@ -42,6 +45,39 @@ const CARD_STYLE: React.CSSProperties = {
   boxShadow: '0 2px 8px var(--app-shadow)',
   overflow: 'hidden',
 };
+
+type Level = 'high' | 'medium' | 'low';
+
+const LEVEL_COLORS: Record<Level, string> = {
+  high: 'red',
+  medium: 'yellow',
+  low: 'blue',
+};
+
+const LEVEL_BADGE_STYLE: React.CSSProperties = { minWidth: 64, textAlign: 'center' as const };
+
+function normalizeLevel(s: string | undefined): Level {
+  if (s == null || typeof s !== 'string') return 'medium';
+  const v = s.toLowerCase().trim();
+  if (v === 'high') return 'high';
+  if (v === 'low') return 'low';
+  return 'medium';
+}
+
+function LevelBadge({ level }: { level?: Level }) {
+  const L = level === 'high' || level === 'medium' || level === 'low' ? level : 'medium';
+  return (
+    <Badge
+      size="sm"
+      variant="light"
+      color={LEVEL_COLORS[L]}
+      style={LEVEL_BADGE_STYLE}
+      component="span"
+    >
+      {L.charAt(0).toUpperCase() + L.slice(1)}
+    </Badge>
+  );
+}
 
 type PRItem = {
   number: number;
@@ -92,47 +128,39 @@ export function PullRequestsPage() {
     { id: reviewChatSessionId! },
     { enabled: !!reviewChatSessionId && !!selectedPr }
   );
+  const utils = trpc.useUtils();
+  const { data: overviewData, refetch: refetchOverview } = trpc.github.getPROverview.useQuery(
+    { pullNumber: selectedPr?.number ?? 0 },
+    {
+      enabled: !!selectedPr?.number,
+      refetchInterval: (q) => (q.state.data?.building ? 1200 : false),
+    }
+  );
+  const invalidateOverview = trpc.github.invalidatePROverview.useMutation({
+    onSuccess: (_, variables) => {
+      utils.github.getPROverview.invalidate({ pullNumber: variables.pullNumber });
+      refetchOverview();
+    },
+  });
 
   const prFileSet = new Set(
     diffFiles.map((f) => f.path.replace(/\\/g, '/').trim())
   );
-  const relatedFiles: string[] = [];
-  let relatedToActive: string[] = [];
-  if (depGraph?.nodes?.length && depGraph?.edges?.length && !depGraph.building) {
-    const seen = new Set<string>();
+  let inboundFiles: string[] = [];
+  let outboundFiles: string[] = [];
+  if (depGraph?.nodes?.length && depGraph?.edges?.length && !depGraph.building && activeFile) {
+    const active = activeFile.replace(/\\/g, '/').trim();
+    const inbound = new Set<string>();
+    const outbound = new Set<string>();
     for (const e of depGraph.edges) {
       const s = (e.source ?? '').replace(/\\/g, '/').trim();
       const t = (e.target ?? '').replace(/\\/g, '/').trim();
-      const srcInPr = prFileSet.has(s);
-      const tgtInPr = prFileSet.has(t);
-      if (srcInPr && !prFileSet.has(t) && t) {
-        if (!seen.has(t)) {
-          seen.add(t);
-          relatedFiles.push(t);
-        }
-      }
-      if (tgtInPr && !prFileSet.has(s) && s) {
-        if (!seen.has(s)) {
-          seen.add(s);
-          relatedFiles.push(s);
-        }
-      }
+      if (t === active && s) inbound.add(s);
+      if (s === active && t) outbound.add(t);
     }
-    relatedFiles.sort();
-
-    if (activeFile) {
-      const active = activeFile.replace(/\\/g, '/').trim();
-      const toActive = new Set<string>();
-      for (const e of depGraph.edges) {
-        const s = (e.source ?? '').replace(/\\/g, '/').trim();
-        const t = (e.target ?? '').replace(/\\/g, '/').trim();
-        if (s === active && t && !toActive.has(t)) toActive.add(t);
-        if (t === active && s && !toActive.has(s)) toActive.add(s);
-      }
-      relatedToActive = [...toActive].sort();
-    }
+    inboundFiles = [...inbound].sort();
+    outboundFiles = [...outbound].sort();
   }
-  const displayRelatedFiles = activeFile ? relatedToActive : relatedFiles;
   const suggestedFiles = reviewSession?.suggestedFiles ?? [];
 
   if (repoLoading) {
@@ -227,6 +255,26 @@ export function PullRequestsPage() {
           overflow: 'hidden',
         }}
       >
+        <Box style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--app-border)' }}>
+          <img
+            src="/static/konstruct-waving.png"
+            alt="Konstruct"
+            style={{ maxWidth: 80, height: 'auto', maxHeight: 90, objectFit: 'contain', flexShrink: 0 }}
+          />
+          <span
+            style={{
+              fontSize: '2rem',
+              fontWeight: 700,
+              letterSpacing: '-1px',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text' as const,
+            }}
+          >
+            Konstruct
+          </span>
+        </Box>
         <Box style={{ padding: '12px 16px', borderBottom: '1px solid var(--app-border)' }}>
           <Title order={4}>Pull requests</Title>
           <Text size="xs" c="dimmed">{githubRepo.owner}/{githubRepo.repo}</Text>
@@ -300,7 +348,7 @@ export function PullRequestsPage() {
           </Box>
         ) : (
           <>
-            {/* Top: PR diff */}
+            {/* Top: PR tabs (Overview | Diff) */}
             <Box
               style={{
                 ...CARD_STYLE,
@@ -314,114 +362,145 @@ export function PullRequestsPage() {
                 <Title order={4}>#{selectedPr.number} {selectedPr.title}</Title>
                 <Text size="xs" c="dimmed">{selectedPr.headRef} → {selectedPr.baseRef}</Text>
               </Box>
-              {diffLoading ? (
-                <Box py="xl" style={{ textAlign: 'center' }}>
-                  <Loader size="sm" />
-                  <Text size="sm" c="dimmed" mt="xs">Loading diff…</Text>
-                </Box>
-              ) : prDiffData?.error ? (
-                <Box p="md">
-                  <Alert color="red" title="Could not load diff">
-                    {prDiffData.message ?? prDiffData.error}
-                  </Alert>
-                </Box>
-              ) : hasDiff ? (
-                <Box style={{ flex: 1, minHeight: 0 }}>
-                  <DiffViewer
-                    diffFiles={diffFiles}
-                    activeFile={activeFile}
-                    onFileSelect={setActiveFile}
-                    sessionId={null}
-                    comments={[]}
-                    onCommentAdded={() => {}}
-                  />
-                </Box>
-              ) : (
-                <Box py="xl" style={{ textAlign: 'center' }}>
-                  <Text size="sm" c="dimmed">No diff for this PR.</Text>
-                </Box>
-              )}
+              <Tabs defaultValue="overview" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <Tabs.List>
+                  <Tabs.Tab value="overview">Overview</Tabs.Tab>
+                  <Tabs.Tab value="diff">Diff</Tabs.Tab>
+                </Tabs.List>
+                <Tabs.Panel value="overview" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                  {selectedPr && (
+                    <Box style={{ padding: '8px 16px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+                      <Button
+                        variant="light"
+                        size="xs"
+                        loading={invalidateOverview.isPending || overviewData?.building}
+                        disabled={overviewData?.building}
+                        onClick={() => selectedPr && invalidateOverview.mutate({ pullNumber: selectedPr.number })}
+                      >
+                        {overviewData?.building ? 'Analyzing…' : 'Regenerate summary'}
+                      </Button>
+                    </Box>
+                  )}
+                  {overviewData?.building ? (
+                    <Box py="xl" style={{ textAlign: 'center' }}>
+                      <Loader size="sm" />
+                      <Text size="md" c="dimmed" mt="xs">Analyzing PR…</Text>
+                    </Box>
+                  ) : overviewData?.error ? (
+                    <Box p="md">
+                      <Alert color="orange" title="Overview unavailable">{overviewData.error}</Alert>
+                    </Box>
+                  ) : overviewData?.overview ? (
+                    <Box p="md" style={{ fontSize: '1.0625rem' }}>
+                      <Title order={4} mb="sm">{overviewData.overview.title}</Title>
+                      <Text size="md" mb="md" c="dimmed">{overviewData.overview.summary}</Text>
+                      {overviewData.overview.keyFiles.length > 0 && (
+                        <Stack gap="xs" mb="md">
+                          <Text size="md" fw={600}>Key files</Text>
+                          <List size="md" spacing="xs">
+                            {overviewData.overview.keyFiles.map((k) => (
+                              <List.Item key={k.path}>
+                                <LevelBadge level={normalizeLevel(k.dangerLevel)} />
+                                <Text component="span" size="md" ml="xs">{k.path}</Text>
+                                {k.reason && <Text size="sm" c="dimmed" ml="xs">{k.reason}</Text>}
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Stack>
+                      )}
+                      {overviewData.overview.actionItems.length > 0 && (
+                        <Stack gap="xs">
+                          <Text size="md" fw={600}>Things to look for</Text>
+                          <List size="md" spacing="xs">
+                            {overviewData.overview.actionItems.map((item, i) => (
+                              <List.Item key={i}>
+                                <LevelBadge level={item.level} />
+                                <Text component="span" size="md" ml="xs">{item.text}</Text>
+                                {item.files && item.files.length > 0 && (
+                                  <Text size="xs" c="dimmed" ml="xs" component="span">
+                                    ({item.files.join(', ')})
+                                  </Text>
+                                )}
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Stack>
+                      )}
+                    </Box>
+                  ) : null}
+                </Tabs.Panel>
+                <Tabs.Panel value="diff" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  {diffLoading ? (
+                    <Box py="xl" style={{ textAlign: 'center' }}>
+                      <Loader size="sm" />
+                      <Text size="sm" c="dimmed" mt="xs">Loading diff…</Text>
+                    </Box>
+                  ) : prDiffData?.error ? (
+                    <Box p="md">
+                      <Alert color="red" title="Could not load diff">
+                        {prDiffData.message ?? prDiffData.error}
+                      </Alert>
+                    </Box>
+                  ) : hasDiff ? (
+                    <Box style={{ flex: 1, minHeight: 0 }}>
+                      <DiffViewer
+                        diffFiles={diffFiles}
+                        activeFile={activeFile}
+                        onFileSelect={setActiveFile}
+                        sessionId={null}
+                        comments={[]}
+                        onCommentAdded={() => {}}
+                      />
+                    </Box>
+                  ) : (
+                    <Box py="xl" style={{ textAlign: 'center' }}>
+                      <Text size="sm" c="dimmed">No diff for this PR.</Text>
+                    </Box>
+                  )}
+                </Tabs.Panel>
+              </Tabs>
             </Box>
 
-            {/* Bottom: chat + reviewer image on the right */}
+            {/* Bottom: chat */}
             <Box
               style={{
-                flex: 1,
+                ...CARD_STYLE,
+                flex: 1.5,
                 minHeight: 0,
                 display: 'flex',
-                flexDirection: 'row',
-                gap: 16,
-                alignItems: 'stretch',
+                flexDirection: 'column',
               }}
             >
-              <Box
-                style={{
-                  ...CARD_STYLE,
-                  flex: 1,
-                  minWidth: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                <ReviewAssistantPanel
-                  sessionId={reviewChatSessionId}
-                  prContext={selectedPr ? { pullNumber: selectedPr.number } : undefined}
-                />
-              </Box>
-              <Box
-                style={{
-                  flexShrink: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 12,
-                }}
-              >
-                <img
-                  src="/static/konstruct-reviewer.png"
-                  alt="Code reviewer"
-                  style={{ maxWidth: 160, height: 'auto', maxHeight: 180, objectFit: 'contain' }}
-                />
-              </Box>
+              <ReviewAssistantPanel
+                sessionId={reviewChatSessionId}
+                prContext={selectedPr ? { pullNumber: selectedPr.number } : undefined}
+              />
             </Box>
           </>
         )}
       </Box>
 
-      {/* Right: accordion (Related files + Assistant suggestions) when a PR is selected */}
+      {/* Right: accordion (Inbound / Outbound / Assistant suggestions) when a PR is selected */}
       {selectedPr && (
-        <Box
-          style={{
-            ...CARD_STYLE,
-            width: 280,
-            minWidth: 260,
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          <Box style={{ padding: '12px 16px', borderBottom: '1px solid var(--app-border)' }}>
-            <Title order={5}>Context</Title>
+        <Box className="chat-right-panel" style={{ ...CARD_STYLE, borderLeft: '1px solid var(--app-border)' }}>
+          <Box style={{ padding: '8px 14px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+            <Title order={5} style={{ margin: 0, fontSize: '0.85em', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+              Context
+            </Title>
           </Box>
-          <ScrollArea style={{ flex: 1 }} type="auto">
-            <Accordion
-              variant="separated"
-              defaultValue={['related', 'suggestions']}
-              multiple
-              styles={{
-                content: { padding: '8px 12px' },
-                control: { padding: '10px 12px' },
-                item: { border: 'none', borderBottom: '1px solid var(--app-border)' },
-              }}
-            >
-              <Accordion.Item value="related">
-                <Accordion.Control>Related files</Accordion.Control>
-                <Accordion.Panel>
+          <Accordion defaultValue={['inbound', 'outbound', 'suggestions']} multiple style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <Accordion.Item value="inbound">
+              <Accordion.Control>
+                <Text component="span" size="sm" fw={600}>Depend on this file (inbound)</Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 12px' }}>
                   <Text size="xs" c="dimmed" mb="xs">
-                    Files that use or are used by the code in this PR (from dependency graph).
+                    Files that import or depend on the selected file.
                   </Text>
-                  {depGraphLoading && !depGraph ? (
+                  {!activeFile ? (
+                    <Text size="sm" c="dimmed">Select a file in the diff to see inbound dependencies.</Text>
+                  ) : depGraphLoading && !depGraph ? (
                     <Group gap="xs">
                       <Loader size="sm" />
                       <Text size="sm" c="dimmed">Loading graph…</Text>
@@ -432,48 +511,74 @@ export function PullRequestsPage() {
                         <Loader size="sm" />
                         <Text size="sm" c="dimmed">
                           {depGraph.phase === 'discovering'
-                            ? `Discovering files… ${depGraph.filesProcessed ?? 0} found`
-                            : `Building graph… ${depGraph.filesProcessed ?? 0} of ${depGraph.totalFiles ?? 0} files`}
+                            ? `Discovering… ${depGraph.filesProcessed ?? 0} found`
+                            : `Building… ${depGraph.filesProcessed ?? 0}/${depGraph.totalFiles ?? 0}`}
                         </Text>
                       </Group>
-                      {depGraph.currentDir && (
-                        <Text size="xs" c="dimmed">In: {depGraph.currentDir}</Text>
-                      )}
+                      {depGraph.currentDir && <Text size="xs" c="dimmed">In: {depGraph.currentDir}</Text>}
                     </Stack>
                   ) : depGraph?.error ? (
                     <Text size="sm" c="red">{depGraph.error}</Text>
-                  ) : displayRelatedFiles.length === 0 ? (
-                    <Text size="sm" c="dimmed">
-                      {activeFile ? `No files in the graph are connected to the selected file.` : 'No related files found.'}
-                    </Text>
+                  ) : inboundFiles.length === 0 ? (
+                    <Text size="sm" c="dimmed">No inbound dependencies in the graph.</Text>
                   ) : (
                     <Stack gap={4}>
-                      {activeFile && (
-                        <Text size="xs" c="dimmed">
-                          Related to: {activeFile}
-                        </Text>
-                      )}
-                      {displayRelatedFiles.map((p) => (
-                        <Text
-                          key={p}
-                          size="sm"
-                          component="div"
-                          style={{
-                            fontFamily: 'var(--mono-font)',
-                            wordBreak: 'break-all',
-                            cursor: 'default',
-                          }}
-                        >
-                          {p}
-                        </Text>
+                      {inboundFiles.map((p) => (
+                        <Text key={p} size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{p}</Text>
                       ))}
                     </Stack>
                   )}
-                </Accordion.Panel>
-              </Accordion.Item>
-              <Accordion.Item value="suggestions">
-                <Accordion.Control>Assistant suggestions</Accordion.Control>
-                <Accordion.Panel>
+                </div>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="outbound">
+              <Accordion.Control>
+                <Text component="span" size="sm" fw={600}>This file depends on (outbound)</Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 12px' }}>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    Files the selected file imports or depends on.
+                  </Text>
+                  {!activeFile ? (
+                    <Text size="sm" c="dimmed">Select a file in the diff to see outbound dependencies.</Text>
+                  ) : depGraphLoading && !depGraph ? (
+                    <Group gap="xs">
+                      <Loader size="sm" />
+                      <Text size="sm" c="dimmed">Loading graph…</Text>
+                    </Group>
+                  ) : depGraph?.building ? (
+                    <Stack gap={4}>
+                      <Group gap="xs">
+                        <Loader size="sm" />
+                        <Text size="sm" c="dimmed">
+                          {depGraph.phase === 'discovering'
+                            ? `Discovering… ${depGraph.filesProcessed ?? 0} found`
+                            : `Building… ${depGraph.filesProcessed ?? 0}/${depGraph.totalFiles ?? 0}`}
+                        </Text>
+                      </Group>
+                      {depGraph.currentDir && <Text size="xs" c="dimmed">In: {depGraph.currentDir}</Text>}
+                    </Stack>
+                  ) : depGraph?.error ? (
+                    <Text size="sm" c="red">{depGraph.error}</Text>
+                  ) : outboundFiles.length === 0 ? (
+                    <Text size="sm" c="dimmed">No outbound dependencies in the graph.</Text>
+                  ) : (
+                    <Stack gap={4}>
+                      {outboundFiles.map((p) => (
+                        <Text key={p} size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{p}</Text>
+                      ))}
+                    </Stack>
+                  )}
+                </div>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="suggestions">
+              <Accordion.Control>
+                <Text component="span" size="sm" fw={600}>Assistant suggestions</Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 12px' }}>
                   <Text size="xs" c="dimmed" mb="xs">
                     Files the reviewer assistant thinks are relevant (even if not in the graph).
                   </Text>
@@ -482,25 +587,14 @@ export function PullRequestsPage() {
                   ) : (
                     <Stack gap={4}>
                       {suggestedFiles.map((p) => (
-                        <Text
-                          key={p}
-                          size="sm"
-                          component="div"
-                          style={{
-                            fontFamily: 'var(--mono-font)',
-                            wordBreak: 'break-all',
-                            cursor: 'default',
-                          }}
-                        >
-                          {p}
-                        </Text>
+                        <Text key={p} size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{p}</Text>
                       ))}
                     </Stack>
                   )}
-                </Accordion.Panel>
-              </Accordion.Item>
-            </Accordion>
-          </ScrollArea>
+                </div>
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
         </Box>
       )}
     </Box>
