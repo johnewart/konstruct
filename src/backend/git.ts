@@ -392,11 +392,42 @@ export function getGitDiff(repoPath: string = '.'): GitDiffFile[] {
 
     for (const line of statusOutput.split('\n')) {
       if (!line.trim()) continue;
-      const match = line.match(/^([AMDR?C])\s+(.+)$/);
-      if (!match) continue;
 
-      const status = match[1] as GitStatus;
-      const filePath = match[2];
+      // Parse porcelain v1 format: "XY PATH" (same as getChangedFiles)
+      let filePath: string;
+      let status: GitStatus;
+
+      if (line.startsWith('??')) {
+        filePath = line.substring(2).trim();
+        status = '??';
+      } else if (line.length >= 3) {
+        const firstChar = line[0];
+        const secondChar = line[1];
+        filePath = line.substring(2).trim();
+
+        if (firstChar === 'R' && filePath.includes(' -> ')) {
+          const parts = filePath.split(' -> ');
+          filePath = parts.length === 2 ? parts[1].trim() : filePath;
+        }
+
+        if (secondChar === ' ') {
+          if (firstChar === 'M' || firstChar === 'A' || firstChar === 'D' || firstChar === 'R' || firstChar === 'C') {
+            status = firstChar;
+          } else {
+            continue;
+          }
+        } else {
+          if (secondChar === 'M' || secondChar === 'A' || secondChar === 'D' || secondChar === 'R' || secondChar === 'C') {
+            status = secondChar;
+          } else if (secondChar === '?') {
+            status = '??';
+          } else {
+            continue;
+          }
+        }
+      } else {
+        continue;
+      }
 
       // Get unified diff for this file
       const diffOutput = execSync(`git diff -U10 --no-color -- "${filePath}"`, {
