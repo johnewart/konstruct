@@ -112,9 +112,6 @@ export function getChangedFiles(repoPath: string): GitFileChange[] {
       cwd: actualRepoPath, // Use the discovered root, not the input!
       encoding: 'utf-8',
     });
-    
-    // Debug: Log the raw output
-    console.log('Git status output:', '\n' + statusOutput);
 
     const changes: GitFileChange[] = [];
 

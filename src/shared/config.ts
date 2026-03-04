@@ -184,40 +184,49 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       temperature: (llm?.temperature ??
         defaultConfig.llm.temperature) as number,
     },
-    providers: Array.isArray(providers)
-      ? providers.map((p) => {
-          const base = (p && typeof p === 'object' ? { ...p } : {}) as Record<string, unknown>;
-          const rawModels = p?.models as Array<Record<string, unknown>> | undefined;
-          const models: ProviderModel[] | undefined = Array.isArray(rawModels)
-            ? rawModels
-              .filter((m) => m && (m.id ?? m.name))
-              .map((m, i) => ({
-                id: String(m?.id ?? m?.name ?? `model-${i}`),
-                name: String(m?.name ?? m?.id ?? ''),
-                contextWindow:
-                  m?.contextWindow != null || m?.context_window != null
-                    ? Number(m?.contextWindow ?? m?.context_window)
-                    : undefined,
-              }))
-            : undefined;
-          return {
-            ...base,
-            id: String(p?.id ?? ''),
-            name: String(p?.name ?? p?.id ?? ''),
-            type: String(p?.type ?? ''),
-            secret_ref: p?.secret_ref ? String(p.secret_ref).trim() : undefined,
-            base_url: p?.base_url != null ? String(p.base_url) : undefined,
-            default_model: p?.default_model != null ? String(p.default_model) : undefined,
-            endpoint: p?.endpoint != null ? String(p.endpoint) : undefined,
-            aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
-            runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
-            claude_cli_path: p?.claude_cli_path != null ? String(p.claude_cli_path).trim() : undefined,
-            models: models?.length ? models : undefined,
-            max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
-            temperature: p?.temperature != null ? Number(p.temperature) : undefined,
-          } as ConfigProvider;
-        })
-      : undefined,
+    providers: (() => {
+      if (!Array.isArray(providers)) return undefined;
+      const mapped = providers.map((p) => {
+        const base = (p && typeof p === 'object' ? { ...p } : {}) as Record<string, unknown>;
+        const rawModels = p?.models as Array<Record<string, unknown>> | undefined;
+        const models: ProviderModel[] | undefined = Array.isArray(rawModels)
+          ? rawModels
+            .filter((m) => m && (m.id ?? m.name))
+            .map((m, i) => ({
+              id: String(m?.id ?? m?.name ?? `model-${i}`),
+              name: String(m?.name ?? m?.id ?? ''),
+              contextWindow:
+                m?.contextWindow != null || m?.context_window != null
+                  ? Number(m?.contextWindow ?? m?.context_window)
+                  : undefined,
+            }))
+          : undefined;
+        const type = String(p?.type ?? '');
+        const rawId = String(p?.id ?? '');
+        return {
+          ...base,
+          id: rawId,
+          name: String(p?.name ?? p?.id ?? ''),
+          type,
+          secret_ref: p?.secret_ref ? String(p.secret_ref).trim() : undefined,
+          base_url: p?.base_url != null ? String(p.base_url) : undefined,
+          default_model: p?.default_model != null ? String(p.default_model) : undefined,
+          endpoint: p?.endpoint != null ? String(p.endpoint) : undefined,
+          aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
+          runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
+          claude_cli_path: p?.claude_cli_path != null ? String(p.claude_cli_path).trim() : undefined,
+          models: models?.length ? models : undefined,
+          max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
+          temperature: p?.temperature != null ? Number(p.temperature) : undefined,
+        } as ConfigProvider;
+      });
+      const claudeCliCount = mapped.filter((p) => (p.type ?? '').toLowerCase() === 'claude_cli').length;
+      if (claudeCliCount === 1) {
+        const idx = mapped.findIndex((p) => (p.type ?? '').toLowerCase() === 'claude_cli');
+        if (idx >= 0 && UUID_REGEX.test(mapped[idx].id ?? '')) mapped[idx].id = 'claude_cli';
+      }
+      return mapped;
+    })(),
     runpod: raw.runpod as KonstructConfig['runpod'],
     vast: (() => {
       const v = raw.vast as Record<string, unknown> | undefined;
@@ -396,17 +405,26 @@ export function loadConfig(projectRoot: string): KonstructConfig {
   return config;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Get a provider by id from config. Returns undefined if not found.
+ * If the requested id looks like a UUID and no provider matches, and there is exactly one
+ * provider of type claude_cli, that provider is returned (so sessions created before the
+ * stable-id migration still resolve).
  */
 export function getProviderById(
   config: KonstructConfig,
   providerId: string
 ): ConfigProvider | undefined {
   const id = (providerId ?? '').toLowerCase();
-  return config.providers?.find(
-    (p) => (p.id ?? '').toLowerCase() === id
-  );
+  const direct = config.providers?.find((p) => (p.id ?? '').toLowerCase() === id);
+  if (direct) return direct;
+  if (UUID_REGEX.test((providerId ?? '').trim())) {
+    const claudeCli = config.providers?.filter((p) => (p.type ?? '').toLowerCase() === 'claude_cli');
+    if (claudeCli?.length === 1) return claudeCli[0];
+  }
+  return undefined;
 }
 
 /**

@@ -19,6 +19,7 @@ import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowFor
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { runAgent } from '../agent/claude-cli-agent';
+import * as fs from 'node:fs';
 import { createLogger } from './logger';
 
 const log = createLogger('llm');
@@ -108,6 +109,8 @@ export async function chat(
       })
       .filter(Boolean)
       .join('\n\n');
+
+    // --print and --mcp-config appear to be mutually exclusive in the CLI; do not pass MCP when using --print.
     const reply = await runAgent(prompt, {
       claudePath,
       cwd: projectRoot || undefined,

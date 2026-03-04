@@ -30,6 +30,9 @@
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 const DEFAULT_CLAUDE_PATH =
   process.env.CLAUDE_CLI_PATH ??
@@ -64,6 +67,11 @@ export interface ClaudeAgentOptions {
   timeoutMs?: number;
   /** Environment overrides (merged with process.env). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Path to an MCP config JSON file (--mcp-config).
+   * Use createKonstruktMcpConfig() to generate one that exposes Konstruct tools.
+   */
+  mcpConfigPath?: string;
 }
 
 export interface ClaudeAgentResult {
@@ -100,6 +108,9 @@ function buildArgs(options: ClaudeAgentOptions, promptFromArg?: string): string[
   if (options.disallowedTools?.length) {
     args.push('--disallowed-tools', ...options.disallowedTools);
   }
+  if (options.mcpConfigPath) {
+    args.push('--mcp-config', options.mcpConfigPath);
+  }
 
   if (promptFromArg) args.push(promptFromArg);
 
@@ -128,8 +139,10 @@ export function invokeClaudeAgent(
     stdio: ['pipe', 'pipe', 'pipe'],
   };
 
-  const promptAsArg = prompt.trim();
-  const args = buildArgs(options, promptAsArg || undefined);
+  // Pass prompt via stdin so the CLI receives it (many CLIs read from stdin; avoid ARG_MAX for long prompts)
+  const args = buildArgs(options, undefined);
+  const promptText = prompt.trim();
+  console.log('[claude-cli] spawning:', claudePath, args.map(a => JSON.stringify(a)).join(' '));
   const child = spawn(claudePath, args, spawnOpts);
 
   let stdout = '';
@@ -138,13 +151,19 @@ export function invokeClaudeAgent(
     stdout += chunk.toString();
   });
   child.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
+    const text = chunk.toString();
+    stderr += text;
+    console.log('[claude-cli] stderr:', text.trimEnd());
   });
 
-  // Prompt is passed as argv; close stdin so the process doesn't wait for input
-  const closeStdin = (): void => {
+  // Feed prompt on stdin, then end so the process doesn't wait for more input
+  if (promptText && child.stdin?.writable) {
+    child.stdin.write(promptText, 'utf8', () => {
+      child.stdin?.end();
+    });
+  } else {
     child.stdin?.end();
-  };
+  }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   if (options.timeoutMs != null && options.timeoutMs > 0) {
@@ -173,7 +192,6 @@ export function invokeClaudeAgent(
         exitCode: null,
       });
     });
-    closeStdin();
   });
 }
 
@@ -196,9 +214,59 @@ export async function runAgent(
   return result.stdout;
 }
 
+/**
+ * Write a temporary MCP config JSON that points to Konstruct's MCP server.
+ * Pass the returned path as mcpConfigPath in ClaudeAgentOptions so the claude
+ * CLI loads Konstruct's tools (read_file, grep, AST outline, etc.).
+ *
+ * The caller is responsible for deleting the temp file when done.
+ *
+ * @param projectRoot  Project root passed to the MCP server for path resolution.
+ * @param options.mode Konstruct mode whose toolset to expose (default: "ask").
+ *                     Use "implementation" to include write/run tools.
+ * @param options.serverName  MCP server name in the config (default: "konstruct").
+ * @returns Absolute path to the temp config file.
+ *
+ * @example
+ * ```ts
+ * const mcpConfig = createKonstruktMcpConfig('/my/project', { mode: 'ask' });
+ * try {
+ *   const reply = await runAgent('Summarize the auth module', {
+ *     cwd: '/my/project',
+ *     mcpConfigPath: mcpConfig,
+ *     permissionMode: 'bypassPermissions',
+ *   });
+ *   console.log(reply);
+ * } finally {
+ *   fs.unlinkSync(mcpConfig);
+ * }
+ * ```
+ */
+export function createKonstruktMcpConfig(
+  projectRoot: string,
+  options?: { mode?: string; serverName?: string; serverUrl?: string }
+): string {
+  const serverName = options?.serverName ?? 'konstruct';
+  const mode = options?.mode ?? 'ask';
+  const serverUrl = (options?.serverUrl ?? 'http://localhost:3001').replace(/\/$/, '');
+
+  const mcpUrl = `${serverUrl}/mcp?projectRoot=${encodeURIComponent(projectRoot)}&mode=${encodeURIComponent(mode)}`;
+
+  const config = {
+    mcpServers: {
+      [serverName]: { url: mcpUrl },
+    },
+  };
+
+  const tmpFile = path.join(os.tmpdir(), `konstruct-mcp-${Date.now()}.json`);
+  fs.writeFileSync(tmpFile, JSON.stringify(config, null, 2), 'utf-8');
+  return tmpFile;
+}
+
 export default {
   invokeClaudeAgent,
   runAgent,
   buildArgs,
+  createKonstruktMcpConfig,
   DEFAULT_CLAUDE_PATH,
 };

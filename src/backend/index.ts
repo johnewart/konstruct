@@ -25,6 +25,7 @@ import { appRouter } from './trpc/router';
 import { createContext } from './trpc/context';
 import * as documentStore from '../shared/documentStore';
 import * as agentStream from './agentStream';
+import { handleMcpSse, handleMcpMessage } from './mcp';
 import { createLogger } from '../shared/logger';
 
 const log = createLogger('server');
@@ -90,6 +91,18 @@ async function handleRequest(
     const request = toRequest(req, url.toString());
     const response = await trpcHandler(request, { '*': procedurePath });
     writeResponse(res, response);
+    return;
+  }
+
+  // GET /mcp — MCP SSE session
+  if (pathname === '/mcp' && req.method === 'GET') {
+    handleMcpSse(req, res, url);
+    return;
+  }
+
+  // POST /mcp/messages?sessionId=<id> — MCP JSON-RPC messages
+  if (pathname === '/mcp/messages' && req.method === 'POST') {
+    await handleMcpMessage(req, res, url);
     return;
   }
 

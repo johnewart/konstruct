@@ -97,7 +97,23 @@ export const providerConfigRouter = router({
       })
     )
     .mutation(({ input }) => {
-      const id = randomUUID();
+      const isClaudeCli = input.provider.type.trim().toLowerCase() === 'claude_cli';
+      let id: string;
+      if (input.scope.type === 'global') {
+        const config = loadGlobalConfig();
+        const existing = config.providers ?? [];
+        id = isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
+          ? 'claude_cli'
+          : randomUUID();
+      } else {
+        const path = getProjectPathById(input.scope.projectId);
+        if (!path) throw new Error('Project not found or has no local path');
+        const config = loadProjectOnlyConfig(path);
+        const existing = config.providers ?? [];
+        id = isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
+          ? 'claude_cli'
+          : randomUUID();
+      }
       const provider: ConfigProvider = {
         id,
         name: input.provider.name.trim(),
