@@ -597,6 +597,26 @@ registerTool('suggest_relevant_file', (args, context): ToolResult => {
   return { result: `Added "${filePath.trim()}" to assistant suggestions.` };
 });
 
+registerTool('suggest_improvement', (args, context): ToolResult => {
+  const filePath = str(args.file_path);
+  const suggestion = str(args.suggestion);
+  if (!filePath?.trim()) return { error: 'missing file_path argument' };
+  if (!suggestion?.trim()) return { error: 'missing suggestion argument' };
+  const sessionId = context?.sessionId;
+  const projectRoot = getProjectRoot(context);
+  if (!sessionId) return { error: 'no session — cannot suggest improvement' };
+  const lineNumber = args.line_number != null ? Number(args.line_number) : undefined;
+  const snippet = args.snippet != null ? str(args.snippet) : undefined;
+  const session = sessionStore.addSuggestedImprovement(sessionId, projectRoot, {
+    filePath: filePath.trim(),
+    lineNumber: Number.isFinite(lineNumber) && lineNumber > 0 ? lineNumber : undefined,
+    suggestion: suggestion.trim(),
+    snippet: snippet?.trim(),
+  });
+  if (!session) return { error: 'session not found' };
+  return { result: 'Added improvement suggestion for the user.' };
+});
+
 registerTool('list_todos', (args, context): ToolResult => {
   const sessionId = context?.sessionId;
   if (!sessionId) {

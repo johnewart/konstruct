@@ -339,6 +339,36 @@ const ALL_TOOL_DEFS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_improvement',
+      description:
+        'Record a concrete code improvement suggestion for the user. Use when you want to suggest a specific change (e.g. use const instead of var, add error handling, simplify logic). The suggestion appears in the "Suggested improvements" panel. Path relative to project root; lineNumber is 1-based; snippet is optional example replacement code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: 'File path relative to project root',
+          },
+          line_number: {
+            type: 'number',
+            description: 'Optional 1-based line number the suggestion refers to',
+          },
+          suggestion: {
+            type: 'string',
+            description: 'Clear, actionable suggestion (what to change and why)',
+          },
+          snippet: {
+            type: 'string',
+            description: 'Optional: example code showing the suggested change',
+          },
+        },
+        required: ['file_path', 'suggestion'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_todos',
       description:
         "List the session's todo items (id, description, status: pending|in_progress|completed).",

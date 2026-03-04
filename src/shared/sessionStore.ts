@@ -43,6 +43,14 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/** One improvement suggestion from the review agent (file + optional line + text + optional code snippet). */
+export interface SuggestedImprovement {
+  filePath: string;
+  lineNumber?: number;
+  suggestion: string;
+  snippet?: string;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -52,6 +60,8 @@ export interface Session {
   todos: TodoItem[];
   /** File paths the assistant suggested as relevant to the review (e.g. on PR page). */
   suggestedFiles?: string[];
+  /** Improvement suggestions from the review agent (file, line, suggestion text, optional snippet). */
+  suggestedImprovements?: SuggestedImprovement[];
 }
 
 /**
@@ -106,12 +116,15 @@ function serialize(s: Session): SessionSerialized {
 }
 
 function deserialize(raw: SessionSerialized): Session {
-  const suggested = (raw as SessionSerialized & { suggestedFiles?: string[] }).suggestedFiles;
+  const ext = raw as SessionSerialized & { suggestedFiles?: string[]; suggestedImprovements?: SuggestedImprovement[] };
+  const suggested = ext.suggestedFiles;
+  const improvements = ext.suggestedImprovements;
   return {
     ...raw,
     createdAt: toValidDate(raw.createdAt),
     updatedAt: toValidDate(raw.updatedAt),
     suggestedFiles: Array.isArray(suggested) ? suggested : [],
+    suggestedImprovements: Array.isArray(improvements) ? improvements : [],
   };
 }
 
@@ -316,6 +329,25 @@ export function deleteSession(id: string): boolean {
   return ok;
 }
 
+/**
+ * Delete all sessions for a project. Removes from in-memory map and deletes session files from disk.
+ * Returns the number of sessions deleted.
+ */
+export function deleteAllSessions(projectId: string): number {
+  const list = listSessions(projectId);
+  for (const s of list) {
+    sessionById.delete(s.id);
+    try {
+      const filePath = getSessionFilePathForProject(s.id, projectId);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (err) {
+      log.warn('deleteAllSessions: failed to remove file', s.id, err);
+    }
+  }
+  if (list.length > 0) log.info('deleteAllSessions', projectId, list.length, 'sessions cleared');
+  return list.length;
+}
+
 export function listTodos(sessionId: string): TodoItem[] {
   const entry = sessionById.get(sessionId);
   const session = entry?.session;
@@ -348,6 +380,36 @@ export function addSuggestedFile(
     session.updatedAt = new Date();
     if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   }
+  return session;
+}
+
+/**
+ * Add an improvement suggestion to the session (for review agent).
+ * Loads session from disk if not in memory.
+ */
+export function addSuggestedImprovement(
+  sessionId: string,
+  projectRoot: string,
+  item: SuggestedImprovement
+): Session | undefined {
+  const projectId = resolveProjectId(projectRoot);
+  let entry = sessionById.get(sessionId);
+  if (!entry) {
+    const fromDisk = loadSessionFromDisk(sessionId, projectId);
+    if (!fromDisk) return undefined;
+    entry = { session: fromDisk, projectId };
+    sessionById.set(sessionId, entry);
+  }
+  const session = entry.session;
+  if (!Array.isArray(session.suggestedImprovements)) session.suggestedImprovements = [];
+  session.suggestedImprovements.push({
+    filePath: item.filePath.trim().replace(/\\/g, '/'),
+    lineNumber: item.lineNumber,
+    suggestion: item.suggestion.trim(),
+    snippet: item.snippet?.trim(),
+  });
+  session.updatedAt = new Date();
+  if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   return session;
 }
 

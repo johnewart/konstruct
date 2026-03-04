@@ -70,6 +70,10 @@ export function DiffViewerPage() {
   const createReviewChatSession = trpc.sessions.create.useMutation({
     onSuccess: (session) => setReviewChatSessionId(session.id),
   });
+  const { data: reviewChatSession } = trpc.sessions.get.useQuery(
+    { id: reviewChatSessionId! },
+    { enabled: !!reviewChatSessionId }
+  );
   const { data: reviewSession, refetch: refetchReview } = trpc.review.getOrCreateSession.useQuery(
     undefined,
     { enabled: !!diffFiles && diffFiles.length > 0 }
@@ -162,6 +166,20 @@ export function DiffViewerPage() {
             ) : overviewData?.error ? (
               <Box p="md">
                 <Alert color="orange" title="Summary unavailable">{overviewData.error}</Alert>
+                {reviewChatSession?.suggestedImprovements?.length ? (
+                  <Stack gap="sm" mt="md">
+                    <Text size="lg" fw={600}>Suggested improvements (from chat)</Text>
+                    {reviewChatSession.suggestedImprovements.map((imp, i) => (
+                      <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-surface)' }}>
+                        <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
+                          {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
+                        </Text>
+                        <Text size="sm" mt={4}>{imp.suggestion}</Text>
+                        {imp.snippet ? <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-bg)', borderRadius: 4 }}>{imp.snippet}</Box> : null}
+                      </Box>
+                    ))}
+                  </Stack>
+                ) : null}
               </Box>
             ) : overviewData?.overview ? (
               <Box p="md" style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -228,8 +246,41 @@ export function DiffViewerPage() {
                         </List>
                       </Stack>
                     )}
+                    {reviewChatSession?.suggestedImprovements?.length ? (
+                      <Stack gap="xs">
+                        <Text size="lg" fw={600}>Suggested improvements (from chat)</Text>
+                        <Stack gap="sm">
+                          {reviewChatSession.suggestedImprovements.map((imp, i) => (
+                            <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-surface)' }}>
+                              <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
+                                {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
+                              </Text>
+                              <Text size="sm" mt={4}>{imp.suggestion}</Text>
+                              {imp.snippet ? (
+                                <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-bg)', borderRadius: 4 }}>{imp.snippet}</Box>
+                              ) : null}
+                            </Box>
+                          ))}
+                        </Stack>
+                      </Stack>
+                    ) : null}
                   </Stack>
                 </Box>
+              </Box>
+            ) : reviewChatSession?.suggestedImprovements?.length ? (
+              <Box p="md">
+                <Text size="lg" fw={600} mb="sm">Suggested improvements (from chat)</Text>
+                <Stack gap="sm">
+                  {reviewChatSession.suggestedImprovements.map((imp, i) => (
+                    <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-surface)' }}>
+                      <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
+                        {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
+                      </Text>
+                      <Text size="sm" mt={4}>{imp.suggestion}</Text>
+                      {imp.snippet ? <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-bg)', borderRadius: 4 }}>{imp.snippet}</Box> : null}
+                    </Box>
+                  ))}
+                </Stack>
               </Box>
             ) : null}
           </Tabs.Panel>

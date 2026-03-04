@@ -166,7 +166,14 @@ export function UnifiedChatPanel({
             : prov.defaultModel
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
-      const modelList = models.length > 0 ? models : [{ id: p.id, name: p.name }];
+      const providerType = (p as { type?: string }).type ?? '';
+      const isClaudeCliOrSdk = providerType === 'claude_cli' || providerType === 'claude_sdk';
+      const modelList =
+        models.length > 0
+          ? models
+          : isClaudeCliOrSdk
+            ? [{ id: 'default', name: 'Default' }]
+            : [{ id: p.id, name: p.name }];
       for (const m of modelList) {
         list.push({
           providerId: p.id,

@@ -59,6 +59,9 @@ export async function listProviderModels(
   if (type === 'claude_cli') {
     return { models: [] }; // Claude CLI uses its own model selection; no API to list
   }
+  if (type === 'claude_sdk') {
+    return { models: [] }; // Claude SDK uses Claude Code's model selection; no API to list
+  }
   return { models: [], error: `Listing models for type "${type}" is not supported` };
 }
 

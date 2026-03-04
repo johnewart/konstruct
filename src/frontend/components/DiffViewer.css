@@ -1,7 +1,7 @@
-/* Diff Viewer Styles – IBM Plex Mono */
+/* Diff Viewer Styles – IBM Plex Mono, compact, no wrap */
 .diff-viewer-code-review {
   font-family: 'IBM Plex Mono', monospace !important;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .diff-viewer-code-review * {
@@ -73,7 +73,7 @@
 }
 
 .hunk-header {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--app-text-muted);
   background-color: var(--app-hover);
   padding: 4px 10px;
@@ -84,10 +84,10 @@
 .diff-line {
   display: flex;
   padding: 3px 10px;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  min-width: min-content;
 }
 
 .diff-line-number {

@@ -15,10 +15,11 @@
  */
 
 import { loadConfig, getProviderById, resolveProviderSecret } from './config';
-import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeCliPath } from './providers';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeCliPath, getClaudeSdkPath } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { runAgent } from '../agent/claude-cli-agent';
+import { runSdkQuery } from '../agent/claude-sdk-agent';
 import * as fs from 'node:fs';
 import { createLogger } from './logger';
 
@@ -93,6 +94,40 @@ export async function chat(
   }
   const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
   const isClaudeCli = (provider?.type?.toLowerCase() === 'claude_cli') || (providerId === 'claude_cli');
+  const isClaudeSdk = (provider?.type?.toLowerCase() === 'claude_sdk') || (providerId === 'claude_sdk');
+
+  if (isClaudeSdk) {
+    const prompt = messages
+      .map((m) => {
+        if (m.role === 'system') return `[System]\n${m.content}`;
+        if (m.role === 'user') return `[User]\n${m.content}`;
+        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    const apiKey =
+      (await resolveProviderSecret(projectRoot, providerId)) ??
+      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
+      '';
+    const env = { ...process.env } as Record<string, string | undefined>;
+    if (!apiKey) delete env.ANTHROPIC_API_KEY;
+    else env.ANTHROPIC_API_KEY = apiKey;
+    const sdkPath = getClaudeSdkPath(projectRoot, providerId);
+    const defaultModel = (provider as { default_model?: string } | undefined)?.default_model;
+    const requestedModel = options?.model ?? defaultModel;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedModel ?? '');
+    const model = !requestedModel || requestedModel === 'default' || isUuid ? undefined : requestedModel;
+    const reply = await runSdkQuery(prompt, {
+      cwd: projectRoot || undefined,
+      model,
+      env,
+      signal: options?.signal,
+      pathToClaudeCodeExecutable: sdkPath,
+      timeoutMs: 300_000,
+    });
+    return { content: reply, toolCalls: undefined };
+  }
 
   if (isClaudeCli) {
     const claudePath = getClaudeCliPath(projectRoot, providerId);

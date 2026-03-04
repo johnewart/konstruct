@@ -385,7 +385,10 @@ export function Chat() {
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
       if (models.length === 0) {
-        models = [{ id: p.id, name: p.name }];
+        // Claude CLI/SDK use their own model selection; use "default" so we don't pass provider id (e.g. UUID) as model
+        const providerType = (p as { type?: string }).type ?? '';
+        const isClaudeCliOrSdk = providerType === 'claude_cli' || providerType === 'claude_sdk';
+        models = isClaudeCliOrSdk ? [{ id: 'default', name: 'Default' }] : [{ id: p.id, name: p.name }];
       }
       for (const m of models) {
         list.push({
@@ -643,6 +646,12 @@ export function Chat() {
     onSuccess: () => {
       utils.sessions.list.invalidate();
       navigate('/chat'); // Navigate to a new session or home
+    },
+  });
+  const deleteAllSessions = trpc.sessions.deleteAll.useMutation({
+    onSuccess: (data) => {
+      utils.sessions.list.invalidate();
+      if (data.deleted > 0 && sessionId) navigate('/', { replace: true });
     },
   });
 
@@ -979,18 +988,32 @@ export function Chat() {
             <Accordion.Control>
               <Group justify="space-between" wrap="nowrap" gap="xs">
                 <span>Sessions</span>
-                <Button
-                  type="button"
-                  variant="subtle"
-                  size="xs"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    createSession.mutate({});
-                  }}
-                  loading={createSession.isPending}
-                >
-                  New
-                </Button>
+                <Group gap={4} wrap="nowrap" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="xs"
+                    color="red"
+                    onClick={() => {
+                      if (window.confirm('Clear all chat sessions? This cannot be undone.')) {
+                        deleteAllSessions.mutate();
+                      }
+                    }}
+                    loading={deleteAllSessions.isPending}
+                    title="Clear all sessions"
+                  >
+                    Clear all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="subtle"
+                    size="xs"
+                    onClick={() => createSession.mutate({})}
+                    loading={createSession.isPending}
+                  >
+                    New
+                  </Button>
+                </Group>
               </Group>
             </Accordion.Control>
             <Accordion.Panel

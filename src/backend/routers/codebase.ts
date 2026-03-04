@@ -48,6 +48,10 @@ type BuildState =
 
 const graphCache = new Map<string, CachedGraph>();
 const buildStateMap = new Map<string, BuildState>();
+/** Only one dependency graph build at a time (any key). Prevents multiple rebuilds from racing. */
+let currentBuildKey: string | null = null;
+/** Keys invalidated while a build was in progress; when that build completes it must not overwrite the cache. */
+const invalidatedKeys = new Set<string>();
 
 function cacheKey(projectRoot: string, pathArg: string): string {
   return `${projectRoot}|${pathArg}`;
@@ -145,6 +149,7 @@ export const codebaseRouter = router({
       if (building) {
         if (building.phase === 'error') {
           buildStateMap.delete(key);
+          if (currentBuildKey === key) currentBuildKey = null;
           return {
             error: building.error,
             nodes: [],
@@ -172,6 +177,24 @@ export const codebaseRouter = router({
         };
       }
 
+      if (currentBuildKey !== null && currentBuildKey !== key) {
+        const otherState = buildStateMap.get(currentBuildKey);
+        if (otherState && otherState.phase !== 'error') {
+          return {
+            error: null,
+            nodes: [],
+            edges: [],
+            truncated: false,
+            building: true,
+            phase: otherState.phase,
+            filesProcessed: otherState.filesProcessed,
+            totalFiles: otherState.totalFiles,
+            currentDir: otherState.currentDir ?? undefined,
+            pathStripPrefix,
+          };
+        }
+      }
+
       const init = codebaseOutline.getDiscoveryInitialState(ctx.projectRoot, pathArg);
       if (!init.ok) {
         return {
@@ -191,6 +214,7 @@ export const codebaseRouter = router({
       let queue = [...init.queue];
       let list = [...init.list];
 
+      currentBuildKey = key;
       buildStateMap.set(key, {
         phase: 'discovering',
         filesProcessed: list.length,
@@ -203,6 +227,7 @@ export const codebaseRouter = router({
       }
 
       setImmediate(function runDiscovery() {
+        try {
         const step = codebaseOutline.collectFilesStep(
           queue,
           list,
@@ -271,26 +296,34 @@ export const codebaseRouter = router({
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
-          // Normalize edge targets to known file paths (with extension) so inbound/outbound matching works
-          const knownFiles = new Set(list);
-          const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
-          const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
-          const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
-          const strippedEdges = normalizedEdges.map((e) => ({
-            source: stripRootFromPath(e.source, rootPrefix),
-            target: stripRootFromPath(e.target, rootPrefix),
-            type: e.type,
-          }));
-          graphCache.set(key, {
-            nodes: strippedNodes,
-            edges: strippedEdges,
-            truncated: false,
-            cachedAt: Date.now(),
-          });
+          if (!invalidatedKeys.has(key)) {
+            const knownFiles = new Set(list);
+            const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
+            const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
+            const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
+            const strippedEdges = normalizedEdges.map((e) => ({
+              source: stripRootFromPath(e.source, rootPrefix),
+              target: stripRootFromPath(e.target, rootPrefix),
+              type: e.type,
+            }));
+            graphCache.set(key, {
+              nodes: strippedNodes,
+              edges: strippedEdges,
+              truncated: false,
+              cachedAt: Date.now(),
+            });
+          }
+          invalidatedKeys.delete(key);
           buildStateMap.delete(key);
+          if (currentBuildKey === key) currentBuildKey = null;
         }
 
         parseBatch(0);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          buildStateMap.set(key, { phase: 'error', error: msg });
+          if (currentBuildKey === key) currentBuildKey = null;
+        }
       });
 
       return {
@@ -319,6 +352,8 @@ export const codebaseRouter = router({
       const key = cacheKey(ctx.projectRoot, pathArg);
       graphCache.delete(key);
       buildStateMap.delete(key);
+      invalidatedKeys.add(key);
+      if (currentBuildKey === key) currentBuildKey = null;
       return { invalidated: true };
     }),
 
@@ -327,6 +362,8 @@ export const codebaseRouter = router({
     const count = graphCache.size;
     graphCache.clear();
     buildStateMap.clear();
+    invalidatedKeys.clear();
+    currentBuildKey = null;
     return { cleared: count };
   }),
 });

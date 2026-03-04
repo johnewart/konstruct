@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Accordion,
@@ -117,13 +117,38 @@ export function PullRequestsPage() {
   const diffFiles: GitDiffFile[] = prDiffData?.error === null ? prDiffData.diffFiles : [];
   const hasDiff = diffFiles.length > 0;
 
-  const { data: depGraph, isLoading: depGraphLoading } = trpc.codebase.getDependencyGraph.useQuery(
+  const depGraphRefetchAt100 = useRef(false);
+  const { data: depGraph, isLoading: depGraphLoading, refetch: refetchDepGraph } = trpc.codebase.getDependencyGraph.useQuery(
     { path: '.' },
     {
       enabled: !!selectedPr && diffFiles.length > 0,
-      refetchInterval: (q) => (q.state.data?.building ? 800 : false),
+      refetchInterval: (q) => {
+        const d = q.state.data;
+        if (!d?.building) return false;
+        const total = d.totalFiles ?? 0;
+        const done = d.filesProcessed ?? 0;
+        if (total > 0 && done >= total) return 200;
+        return 800;
+      },
     }
   );
+  useEffect(() => {
+    if (!depGraph?.building || !depGraph?.totalFiles || depGraph.totalFiles === 0) {
+      depGraphRefetchAt100.current = false;
+      return;
+    }
+    if (depGraph.filesProcessed >= depGraph.totalFiles) {
+      if (depGraphRefetchAt100.current) return;
+      depGraphRefetchAt100.current = true;
+      const t1 = setTimeout(() => refetchDepGraph(), 100);
+      const t2 = setTimeout(() => refetchDepGraph(), 350);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+    depGraphRefetchAt100.current = false;
+  }, [depGraph?.building, depGraph?.filesProcessed, depGraph?.totalFiles, refetchDepGraph]);
   const { data: reviewSession } = trpc.sessions.get.useQuery(
     { id: reviewChatSessionId! },
     { enabled: !!reviewChatSessionId && !!selectedPr }
@@ -162,6 +187,7 @@ export function PullRequestsPage() {
     outboundFiles = [...outbound].sort();
   }
   const suggestedFiles = reviewSession?.suggestedFiles ?? [];
+  const suggestedImprovements = reviewSession?.suggestedImprovements ?? [];
 
   if (repoLoading) {
     return (
@@ -489,7 +515,7 @@ export function PullRequestsPage() {
               Context
             </Title>
           </Box>
-          <Accordion defaultValue={['inbound', 'outbound', 'suggestions']} multiple style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Accordion defaultValue={['inbound', 'outbound', 'suggestions', 'improvements']} multiple style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Accordion.Item value="inbound">
               <Accordion.Control>
                 <Text component="span" size="sm" fw={600}>Depend on this file (inbound)</Text>
@@ -589,6 +615,35 @@ export function PullRequestsPage() {
                     <Stack gap={4}>
                       {suggestedFiles.map((p) => (
                         <Text key={p} size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{p}</Text>
+                      ))}
+                    </Stack>
+                  )}
+                </div>
+              </Accordion.Panel>
+            </Accordion.Item>
+            <Accordion.Item value="improvements">
+              <Accordion.Control>
+                <Text component="span" size="sm" fw={600}>Suggested improvements</Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 12px' }}>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    Code improvements the reviewer suggested (file, line, and optional snippet).
+                  </Text>
+                  {suggestedImprovements.length === 0 ? (
+                    <Text size="sm" c="dimmed">None yet. Ask the assistant to review; it can suggest improvements via the suggest_improvement tool.</Text>
+                  ) : (
+                    <Stack gap="sm">
+                      {suggestedImprovements.map((imp, i) => (
+                        <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-bg)' }}>
+                          <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
+                            {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
+                          </Text>
+                          <Text size="sm" mt={4}>{imp.suggestion}</Text>
+                          {imp.snippet ? (
+                            <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-surface)', borderRadius: 4 }}>{imp.snippet}</Box>
+                          ) : null}
+                        </Box>
                       ))}
                     </Stack>
                   )}

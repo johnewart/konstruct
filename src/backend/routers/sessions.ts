@@ -87,6 +87,11 @@ export const sessionsRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(({ input }) => sessionStore.deleteSession(input.id)),
 
+  deleteAll: publicProcedure.mutation(({ ctx }) => {
+    const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    return { deleted: sessionStore.deleteAllSessions(projectId) };
+  }),
+
   listTodos: publicProcedure
     .input(z.object({ sessionId: z.string() }))
     .query(({ input }) => sessionStore.listTodos(input.sessionId)),

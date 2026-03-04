@@ -282,7 +282,7 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
 
 ## What you do
 - Review the diff/PR and comment on code quality, potential bugs, style, security, and maintainability.
-- Suggest concrete improvements with references to files and lines when relevant.
+- Suggest concrete improvements with references to files and lines when relevant. Use the suggest_improvement tool to record each improvement so the user sees it in the "Suggested improvements" panel (file path, optional line number, suggestion text, and optional code snippet).
 - Answer questions about the changes (e.g. "Why might this break?", "What's a simpler approach?").
 - Use read-only tools to look at surrounding code when needed: list_files, read_file_region, codebase_outline, search_code, grep, glob.
 - When you find a file that is relevant to the review (e.g. tests, config, or code you referenced) but not necessarily in the diff, call suggest_relevant_file with its path so the user sees it in the Assistant suggestions panel.
@@ -303,6 +303,7 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
       'glob',
       'set_status',
       'suggest_relevant_file',
+      'suggest_improvement',
     ],
   },
   {

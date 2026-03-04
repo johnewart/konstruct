@@ -43,14 +43,15 @@ export function DiffLine({ line }: DiffLineProps) {
 
   return (
     <Box
+      className="diff-line"
       style={{
         display: 'flex',
         backgroundColor: bgColor,
         borderLeft,
         padding: '3px 10px',
         lineHeight: 1.5,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
+        whiteSpace: 'pre',
+        minWidth: 'min-content',
       }}
     >
       <Text style={{ color: 'var(--app-text-muted)', minWidth: '44px', marginRight: '12px', flexShrink: 0 }}>

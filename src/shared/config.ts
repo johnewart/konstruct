@@ -63,6 +63,8 @@ export type ConfigProvider = {
   runpod_pod_id?: string;
   /** Claude CLI: path to the claude binary (e.g. /path/to/node/bin/claude). */
   claude_cli_path?: string;
+  /** Claude SDK: path to Claude Code executable; uses SDK default if unset. */
+  claude_sdk_path?: string;
   /** Managed list of models (name + context window) for this provider. */
   models?: ProviderModel[];
   max_tokens?: number;
@@ -221,6 +223,7 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
           aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
           runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
           claude_cli_path: p?.claude_cli_path != null ? String(p.claude_cli_path).trim() : undefined,
+          claude_sdk_path: p?.claude_sdk_path != null ? String(p.claude_sdk_path).trim() : undefined,
           models: models?.length ? models : undefined,
           max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
           temperature: p?.temperature != null ? Number(p.temperature) : undefined,
@@ -230,6 +233,11 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       if (claudeCliCount === 1) {
         const idx = mapped.findIndex((p) => (p.type ?? '').toLowerCase() === 'claude_cli');
         if (idx >= 0 && UUID_REGEX.test(mapped[idx].id ?? '')) mapped[idx].id = 'claude_cli';
+      }
+      const claudeSdkCount = mapped.filter((p) => (p.type ?? '').toLowerCase() === 'claude_sdk').length;
+      if (claudeSdkCount === 1) {
+        const idx = mapped.findIndex((p) => (p.type ?? '').toLowerCase() === 'claude_sdk');
+        if (idx >= 0 && UUID_REGEX.test(mapped[idx].id ?? '')) mapped[idx].id = 'claude_sdk';
       }
       return mapped;
     })(),

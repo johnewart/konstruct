@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Title,
@@ -39,14 +39,39 @@ const CARD_STYLE: React.CSSProperties = {
 };
 
 export function CodeExplorerPage() {
-  const [pathArg, setPathArg] = useState('src');
+  const [pathArg, setPathArg] = useState('.');
   const { data, isLoading, error, refetch } = trpc.codebase.getDependencyGraph.useQuery(
     { path: pathArg || '.' },
     {
       enabled: true,
-      refetchInterval: (query) => (query.state.data?.building ? 500 : false),
+      refetchInterval: (query) => {
+        const d = query.state.data;
+        if (!d?.building) return false;
+        const total = d.totalFiles ?? 0;
+        const done = d.filesProcessed ?? 0;
+        if (total > 0 && done >= total) return 200;
+        return 500;
+      },
     }
   );
+  const didRefetchAt100Ref = useRef(false);
+  useEffect(() => {
+    if (!data?.building || !data?.totalFiles || data.totalFiles === 0) {
+      didRefetchAt100Ref.current = false;
+      return;
+    }
+    if (data.filesProcessed >= data.totalFiles) {
+      if (didRefetchAt100Ref.current) return;
+      didRefetchAt100Ref.current = true;
+      const t1 = setTimeout(() => refetch(), 100);
+      const t2 = setTimeout(() => refetch(), 350);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+    didRefetchAt100Ref.current = false;
+  }, [data?.building, data?.filesProcessed, data?.totalFiles, refetch]);
 
   const invalidateGraph = trpc.codebase.invalidateDependencyGraph.useMutation({
     onSuccess: () => refetch(),
@@ -72,7 +97,7 @@ export function CodeExplorerPage() {
         <Title order={3}>Code explorer</Title>
         <Group wrap="nowrap" gap="xs">
           <TextInput
-            placeholder="Path (e.g. src or .)"
+            placeholder="Path (default: root)"
             value={pathArg}
             onChange={(e) => setPathArg(e.currentTarget.value)}
             size="sm"

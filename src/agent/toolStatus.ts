@@ -120,6 +120,11 @@ const STATUS_FNS: Record<string, (args: Record<string, unknown>) => string> = {
     const p = str(args.path);
     return p ? `Suggesting file: ${p}` : 'Suggesting relevant file…';
   },
+  suggest_improvement: (args) => {
+    const fp = str(args.file_path);
+    const snip = str(args.suggestion)?.slice(0, 40);
+    return fp ? `Suggesting improvement: ${fp}${snip ? ` — ${snip}…` : ''}` : 'Suggesting improvement…';
+  },
   list_todos: () => 'Listing todos…',
   add_todo: (args) => {
     const desc = str(args.description);
