@@ -136,7 +136,7 @@ export function CodeExplorerPage() {
               <Text size="xs" c="dimmed">D3 force-directed · {nodes.length} nodes · {edges.length} links</Text>
             </Box>
             <Box style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-              <DependencyGraphForceChart nodes={nodes} edges={edges} />
+              <DependencyGraphForceChart nodes={nodes} edges={edges} pathStripPrefix={data?.pathStripPrefix ?? ''} />
             </Box>
           </Card>
         ) : (

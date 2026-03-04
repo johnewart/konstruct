@@ -43,13 +43,34 @@ function buildGraph(nodes: DepNode[], edges: DepEdge[]): { nodes: D3Node[]; link
 interface DependencyGraphForceChartProps {
   nodes: DepNode[];
   edges: DepEdge[];
+  /** Full root to strip from all paths (projectDir + pathArg with trailing slash). From API pathStripPrefix. */
+  pathStripPrefix?: string;
   style?: React.CSSProperties;
 }
 
-const NODE_RADIUS = 4;
+const MIN_NODE_RADIUS = 4;
+const MAX_NODE_RADIUS = 20;
+const RADIUS_PER_INBOUND = 0.5;
+const DIR_LABEL_MIN_NODES = 5;
 const LINK_STROKE = 1;
+/** Radial layout: distance from center per directory depth level. */
+const RING_SPACING = 90;
 
-export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGraphForceChartProps) {
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** Strip the API root (projectDir + pathArg) from a path. Used for all display and for layout (dir/depth). */
+function stripRoot(path: string, pathStripPrefix?: string): string {
+  const n = normalizePath(path);
+  if (!pathStripPrefix || pathStripPrefix === '') return n;
+  const prefix = normalizePath(pathStripPrefix);
+  const withSlash = prefix.endsWith('/') ? prefix : prefix + '/';
+  if (n.startsWith(withSlash)) return n.slice(withSlash.length).replace(/^\//, '') || n;
+  return n;
+}
+
+export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style }: DependencyGraphForceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [selectedNode, setSelectedNode] = useState<DepNode | null>(null);
@@ -73,6 +94,11 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
 
     const { nodes: d3Nodes, links } = buildGraph(nodes, edges);
     if (d3Nodes.length === 0) return;
+
+    const inDegree = new Map<string, number>();
+    links.forEach((l) => inDegree.set(l.target.path, (inDegree.get(l.target.path) ?? 0) + 1));
+    const getRadius = (d: D3Node) =>
+      Math.min(MAX_NODE_RADIUS, MIN_NODE_RADIUS + (inDegree.get(d.path) ?? 0) * RADIUS_PER_INBOUND);
 
     const width = size.width;
     const height = size.height;
@@ -115,13 +141,42 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
       .selectAll('circle')
       .data(d3Nodes)
       .join('circle')
-      .attr('r', NODE_RADIUS)
+      .attr('r', getRadius)
       .attr('cursor', 'pointer')
       .on('click', (event, d) => {
         event.stopPropagation();
         setSelectedRef.current(d);
       });
-    node.append('title').text((d) => d.path);
+    node.append('title').text((d) => stripRoot(d.path, pathStripPrefix));
+
+    function nodeDir(d: D3Node): string {
+      const stripped = stripRoot(d.path, pathStripPrefix);
+      return stripped.includes('/') ? stripped.split('/').slice(0, -1).join('/') : '';
+    }
+    /** Number of path segments under the explored path (e.g. fides/api/foo → 3). */
+    function nodeDepth(d: D3Node): number {
+      const stripped = stripRoot(d.path, pathStripPrefix);
+      const segments = stripped.split('/').filter(Boolean);
+      return Math.max(1, segments.length);
+    }
+
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const uniqueDirs = new Set(d3Nodes.map(nodeDir).filter(Boolean));
+    const sortedDirs = [...uniqueDirs].sort();
+    const dirToAngle = new Map<string, number>();
+    sortedDirs.forEach((dir, i) => dirToAngle.set(dir, (i / sortedDirs.length) * 2 * Math.PI));
+
+    function radialTargetX(d: D3Node): number {
+      const depth = nodeDepth(d);
+      const angle = dirToAngle.get(nodeDir(d)) ?? 0;
+      return centerX + depth * RING_SPACING * Math.cos(angle);
+    }
+    function radialTargetY(d: D3Node): number {
+      const depth = nodeDepth(d);
+      const angle = dirToAngle.get(nodeDir(d)) ?? 0;
+      return centerY + depth * RING_SPACING * Math.sin(angle);
+    }
 
     const padding = 60;
     const simulation = d3
@@ -131,8 +186,10 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
         d3.forceLink<D3Node, D3Link>(links).id((d) => d.path).distance(60)
       )
       .force('charge', d3.forceManyBody().strength(-200))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(NODE_RADIUS + 2));
+      .force('center', d3.forceCenter(centerX, centerY))
+      .force('collision', d3.forceCollide().radius((d) => getRadius(d) + 2))
+      .force('ringX', d3.forceX(radialTargetX).strength(0.08))
+      .force('ringY', d3.forceY(radialTargetY).strength(0.08));
 
     simulation.on('tick', () => {
       link
@@ -142,6 +199,11 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
         .attr('y2', (d) => d.target.y!);
       node.attr('cx', (d) => d.x!).attr('cy', (d) => d.y!);
     });
+
+    let hoveredDir: string | null = null;
+    function updateNodeOpacity() {
+      node.attr('opacity', (d) => (!hoveredDir ? 1 : nodeDir(d) === hoveredDir ? 1 : 0.2));
+    }
 
     simulation.on('end', () => {
       const xs = d3Nodes.map((d) => d.x ?? 0);
@@ -153,13 +215,54 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
       const w = Math.max(maxX - minX, width);
       const h = Math.max(maxY - minY, height);
       svg.attr('viewBox', [minX, minY, w, h]);
+
+      const dirToNodes = new Map<string, D3Node[]>();
+      d3Nodes.forEach((d) => {
+        const stripped = stripRoot(d.path, pathStripPrefix);
+        const dir = stripped.includes('/') ? stripped.split('/').slice(0, -1).join('/') : '';
+        if (dir === '') return;
+        if (!dirToNodes.has(dir)) dirToNodes.set(dir, []);
+        dirToNodes.get(dir)!.push(d);
+      });
+      const labelData = Array.from(dirToNodes.entries())
+        .filter(([, list]) => list.length > DIR_LABEL_MIN_NODES)
+        .map(([dir, list]) => ({
+          dir,
+          label: stripRoot(dir, pathStripPrefix) || dir,
+          x: d3.mean(list, (n) => n.x)!,
+          y: d3.mean(list, (n) => n.y)!,
+        }));
+      g.selectAll('.dir-label').remove();
+      g.append('g')
+        .attr('class', 'dir-label')
+        .selectAll('text')
+        .data(labelData)
+        .join('text')
+        .attr('x', (d) => d.x)
+        .attr('y', (d) => d.y)
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'middle')
+        .attr('font-size', 11)
+        .attr('fill', 'var(--app-text)')
+        .attr('opacity', 0.85)
+        .attr('cursor', 'pointer')
+        .attr('pointer-events', 'all')
+        .text((d) => d.label)
+        .on('mouseenter', (_, d) => {
+          hoveredDir = d.dir;
+          updateNodeOpacity();
+        })
+        .on('mouseleave', () => {
+          hoveredDir = null;
+          updateNodeOpacity();
+        });
     });
 
     return () => {
       simulation.stop();
       d3.select(container).selectAll('*').remove();
     };
-  }, [nodes, edges, size.width, size.height]);
+  }, [nodes, edges, pathStripPrefix, size.width, size.height]);
 
   return (
     <div
@@ -193,7 +296,7 @@ export function DependencyGraphForceChart({ nodes, edges, style }: DependencyGra
             boxShadow: '0 2px 8px var(--app-shadow)',
           }}
         >
-          {selectedNode.path}
+          {stripRoot(selectedNode.path, pathStripPrefix)}
         </div>
       )}
     </div>

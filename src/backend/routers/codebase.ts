@@ -49,6 +49,21 @@ function cacheKey(projectRoot: string, pathArg: string): string {
   return `${projectRoot}|${pathArg}`;
 }
 
+/** Root path (projectRoot + pathArg) with trailing slash, normalized. Strip this from all node/edge paths before caching. */
+function getPathStripPrefix(projectRoot: string, pathArg: string): string {
+  let p = path.join(projectRoot, pathArg).replace(/\\/g, '/');
+  if (!p.endsWith('/')) p += '/';
+  return p;
+}
+
+/** Strip the root prefix from a path so the frontend only sees paths under the explored dir. */
+function stripRootFromPath(fullPath: string, rootPrefix: string): string {
+  const n = fullPath.replace(/\\/g, '/');
+  if (!rootPrefix || !n.startsWith(rootPrefix)) return n;
+  const rest = n.slice(rootPrefix.length).replace(/^\//, '');
+  return rest || n;
+}
+
 export const codebaseRouter = router({
   /** Get dependency graph for a path (default: project root). Uses tree-sitter; may be empty if tree-sitter is unavailable.
    * When no cached result exists, starts a background build and returns building + progress; poll until building is false. */
@@ -63,6 +78,8 @@ export const codebaseRouter = router({
     .query(({ ctx, input }) => {
       const pathArg = input?.path?.trim() || '.';
       const key = cacheKey(ctx.projectRoot, pathArg);
+      let pathStripPrefix = path.join(ctx.projectRoot, pathArg).replace(/\\/g, '/');
+      if (!pathStripPrefix.endsWith('/')) pathStripPrefix += '/';
 
       const loadErr = codebaseOutline.getOutlineLoadError();
       if (loadErr) {
@@ -76,6 +93,7 @@ export const codebaseRouter = router({
           building: false,
           filesProcessed: 0,
           totalFiles: 0,
+          pathStripPrefix,
         };
       }
 
@@ -89,6 +107,7 @@ export const codebaseRouter = router({
           building: false,
           filesProcessed: cached.nodes.length,
           totalFiles: cached.nodes.length,
+          pathStripPrefix,
         };
       }
 
@@ -106,6 +125,7 @@ export const codebaseRouter = router({
             filesProcessed: 0,
             totalFiles: 0,
             currentDir: undefined,
+            pathStripPrefix,
           };
         }
         return {
@@ -118,6 +138,7 @@ export const codebaseRouter = router({
           filesProcessed: building.filesProcessed,
           totalFiles: building.totalFiles,
           currentDir: building.currentDir ?? undefined,
+          pathStripPrefix,
         };
       }
 
@@ -133,6 +154,7 @@ export const codebaseRouter = router({
           filesProcessed: 0,
           totalFiles: 0,
           currentDir: undefined,
+          pathStripPrefix,
         };
       }
 
@@ -219,7 +241,14 @@ export const codebaseRouter = router({
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
-          graphCache.set(key, { nodes: allNodes, edges: allEdges, truncated: false });
+          const rootPrefix = getPathStripPrefix(projectRoot, pathArg);
+          const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
+          const strippedEdges = allEdges.map((e) => ({
+            source: stripRootFromPath(e.source, rootPrefix),
+            target: stripRootFromPath(e.target, rootPrefix),
+            type: e.type,
+          }));
+          graphCache.set(key, { nodes: strippedNodes, edges: strippedEdges, truncated: false });
           buildStateMap.delete(key);
         }
 
@@ -236,6 +265,7 @@ export const codebaseRouter = router({
         filesProcessed: list.length,
         totalFiles: 0,
         currentDir: list.length > 0 ? path.relative(ctx.projectRoot, path.dirname(list[0])) || '.' : pathArg,
+        pathStripPrefix,
       };
     }),
 
