@@ -24,11 +24,11 @@ import {
   TextInput,
   Alert,
   Card,
-  Table,
-  ScrollArea,
-  Badge,
+  Progress,
+  Button,
 } from '@mantine/core';
 import { trpc } from '../../client/trpc';
+import { DependencyGraphForceChart } from '../components/DependencyGraphForceChart';
 
 const CARD_STYLE: React.CSSProperties = {
   backgroundColor: 'var(--app-surface)',
@@ -40,11 +40,27 @@ const CARD_STYLE: React.CSSProperties = {
 
 export function CodeExplorerPage() {
   const [pathArg, setPathArg] = useState('src');
-  const { data, isLoading, error } = trpc.codebase.getDependencyGraph.useQuery(
+  const { data, isLoading, error, refetch } = trpc.codebase.getDependencyGraph.useQuery(
     { path: pathArg || '.' },
-    { enabled: true }
+    {
+      enabled: true,
+      refetchInterval: (query) => (query.state.data?.building ? 500 : false),
+    }
   );
 
+  const invalidateGraph = trpc.codebase.invalidateDependencyGraph.useMutation({
+    onSuccess: () => refetch(),
+  });
+
+  const handleRebuild = () => {
+    invalidateGraph.mutate({ path: pathArg || '.' });
+  };
+
+  const building = data?.building ?? false;
+  const buildPhase = data?.phase ?? 'parsing';
+  const filesProcessed = data?.filesProcessed ?? 0;
+  const totalFiles = data?.totalFiles ?? 0;
+  const currentDir = data?.currentDir ?? '';
   const nodes = data?.nodes ?? [];
   const edges = data?.edges ?? [];
   const apiError = data?.error ?? null;
@@ -54,13 +70,23 @@ export function CodeExplorerPage() {
     <Stack p="md" gap="md" style={{ height: 'calc(100vh - var(--app-topnav-height) - 32px)', minHeight: 0 }}>
       <Group justify="space-between" wrap="nowrap">
         <Title order={3}>Code explorer</Title>
-        <TextInput
-          placeholder="Path (e.g. src or .)"
-          value={pathArg}
-          onChange={(e) => setPathArg(e.currentTarget.value)}
-          size="sm"
-          style={{ maxWidth: 220 }}
-        />
+        <Group wrap="nowrap" gap="xs">
+          <TextInput
+            placeholder="Path (e.g. src or .)"
+            value={pathArg}
+            onChange={(e) => setPathArg(e.currentTarget.value)}
+            size="sm"
+            style={{ maxWidth: 220 }}
+          />
+          <Button
+            size="sm"
+            variant="light"
+            loading={invalidateGraph.isPending}
+            onClick={handleRebuild}
+          >
+            Rebuild graph
+          </Button>
+        </Group>
       </Group>
 
       {error && (
@@ -81,82 +107,41 @@ export function CodeExplorerPage() {
         </Alert>
       )}
 
-      {isLoading ? (
+      {building && (
+        <Card withBorder padding="md" style={CARD_STYLE}>
+          <Text size="sm" fw={500} mb="xs">
+            {totalFiles > 0
+              ? `Building dependency graph… ${filesProcessed} of ${totalFiles} files processed`
+              : buildPhase === 'discovering'
+                ? `Discovering files in ${currentDir || '.'}… ${filesProcessed} found so far`
+                : 'Discovering files…'}
+          </Text>
+          <Progress
+            value={totalFiles > 0 ? Math.round((filesProcessed / totalFiles) * 100) : undefined}
+            size="md"
+            striped
+            animated={totalFiles === 0}
+          />
+        </Card>
+      )}
+
+      {!building && (isLoading && !data ? (
         <Text size="sm" c="dimmed">
-          Building dependency graph…
+          Loading…
         </Text>
       ) : (
-        <Group align="stretch" gap="md" wrap="nowrap" style={{ flex: 1, minHeight: 0 }}>
-          <Card withBorder padding="md" style={{ ...CARD_STYLE, flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <Title order={5} mb="xs">
-              Files ({nodes.length})
-            </Title>
-            <ScrollArea style={{ flex: 1, minHeight: 0 }}>
-              {nodes.length === 0 ? (
-                <Text size="sm" c="dimmed">
-                  No files with parseable dependencies in this path.
-                </Text>
-              ) : (
-                <Stack gap={4}>
-                  {nodes.map((node) => (
-                    <Box
-                      key={node.path}
-                      style={{
-                        padding: '6px 8px',
-                        borderRadius: 4,
-                        backgroundColor: 'var(--app-hover)',
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                      }}
-                    >
-                      {node.path}
-                    </Box>
-                  ))}
-                </Stack>
-              )}
-            </ScrollArea>
+        (nodes.length > 0 || edges.length > 0) ? (
+          <Card withBorder padding={0} style={{ ...CARD_STYLE, flex: 1, minHeight: 400, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <Box p="xs" style={{ borderBottom: '1px solid var(--app-border)' }}>
+              <Text size="xs" c="dimmed">D3 force-directed · {nodes.length} nodes · {edges.length} links</Text>
+            </Box>
+            <Box style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+              <DependencyGraphForceChart nodes={nodes} edges={edges} />
+            </Box>
           </Card>
-
-          <Card withBorder padding="md" style={{ ...CARD_STYLE, flex: 2, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <Title order={5} mb="xs">
-              Dependencies ({edges.length})
-            </Title>
-            <ScrollArea style={{ flex: 1, minHeight: 0 }}>
-              {edges.length === 0 ? (
-                <Text size="sm" c="dimmed">
-                  No import/export/require edges found.
-                </Text>
-              ) : (
-                <Table striped highlightOnHover withTableBorder withColumnBorders layout="fixed">
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th style={{ width: '40%' }}>Source</Table.Th>
-                      <Table.Th style={{ width: '40%' }}>Target</Table.Th>
-                      <Table.Th style={{ width: 100 }}>Type</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {edges.map((edge, i) => (
-                      <Table.Tr key={`${edge.source}-${edge.target}-${i}`}>
-                        <Table.Td style={{ fontFamily: 'monospace', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {edge.source}
-                        </Table.Td>
-                        <Table.Td style={{ fontFamily: 'monospace', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {edge.target}
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge size="xs" variant="light">
-                            {edge.type}
-                          </Badge>
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              )}
-            </ScrollArea>
-          </Card>
-        </Group>
+        ) : (
+          <Text size="sm" c="dimmed">No files or dependencies in this path. Try a different path (e.g. src or .).</Text>
+        ))
       )}
     </Stack>
   );

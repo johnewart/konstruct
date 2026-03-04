@@ -109,7 +109,7 @@ function formatOutline(relPath: string, entries: OutlineEntry[]): string {
   return lines.join('\n');
 }
 
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   'node_modules',
   'dist',
   'build',
@@ -121,19 +121,56 @@ const SKIP_DIRS = new Set([
   '.git',
 ]);
 
-function collectFiles(
-  dir: string,
-  baseDir: string,
+/**
+ * Get initial state for incremental discovery. Validates path and returns queue + list.
+ * If path is a file: list = [path], queue = []. If directory: queue = [resolved], list = [].
+ */
+export function getDiscoveryInitialState(
+  projectRoot: string,
+  pathArg: string
+): { ok: true; queue: string[]; list: string[] } | { ok: false; error: string } {
+  const resolved = path.resolve(projectRoot, pathArg);
+  const root = path.resolve(projectRoot);
+  const sep = path.sep;
+  if (root && resolved !== root && !resolved.startsWith(root + sep)) {
+    return { ok: false, error: '(path outside project root)' };
+  }
+  const relResolved = path.relative(projectRoot, resolved);
+  const topDir = relResolved.split(path.sep)[0];
+  if (SKIP_DIRS.has(topDir)) {
+    return { ok: false, error: `(path is under ${topDir}/; try e.g. src/)` };
+  }
+  const stat = fs.statSync(resolved);
+  if (stat.isFile()) {
+    const ext = path.extname(resolved).slice(1).toLowerCase();
+    if (SUPPORTED_EXTENSIONS.has(ext)) {
+      return { ok: true, queue: [], list: [resolved] };
+    }
+    return { ok: true, queue: [], list: [] };
+  }
+  return { ok: true, queue: [resolved], list: [] };
+}
+
+/**
+ * Process one directory in the discovery queue. Mutates queue and list.
+ * Returns the directory that was processed, or null if queue was empty (discovery done).
+ */
+export function collectFilesStep(
+  queue: string[],
+  list: string[],
+  projectRoot: string,
   globPattern: string | null,
-  list: string[]
-): void {
-  if (list.length >= MAX_FILES) return;
+  maxFiles: number,
+  onFileFound?: (currentDir: string, filesFound: number) => void
+): { lastDir: string } | null {
+  if (list.length >= maxFiles) return null;
+  const dir = queue.shift();
+  if (dir === undefined) return null;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
-      if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name))
-        collectFiles(full, baseDir, globPattern, list);
+      if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) queue.push(full);
       continue;
     }
     const ext = path.extname(e.name).slice(1).toLowerCase();
@@ -147,6 +184,40 @@ function collectFiles(
       if (!re.test(base)) continue;
     }
     list.push(full);
+    onFileFound?.(dir, list.length);
+  }
+  return { lastDir: dir };
+}
+
+function collectFiles(
+  dir: string,
+  baseDir: string,
+  globPattern: string | null,
+  list: string[],
+  maxFiles: number = MAX_FILES,
+  onFileFound?: (currentDir: string, filesFound: number) => void
+): void {
+  if (list.length >= maxFiles) return;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name))
+        collectFiles(full, baseDir, globPattern, list, maxFiles, onFileFound);
+      continue;
+    }
+    const ext = path.extname(e.name).slice(1).toLowerCase();
+    if (!SUPPORTED_EXTENSIONS.has(ext)) continue;
+    if (globPattern) {
+      const base = path.basename(e.name);
+      const parts = globPattern
+        .split('*')
+        .map((p) => p.replace(/\[.+^${}()|\[\]\]/g, '\\$&'));
+      const re = new RegExp('^' + parts.join('.*') + '$');
+      if (!re.test(base)) continue;
+    }
+    list.push(full);
+    onFileFound?.(dir, list.length);
   }
 }
 
@@ -155,12 +226,22 @@ function collectFiles(
  * @param projectRoot Project root directory
  * @param pathArg File or directory path to analyze
  * @param globPattern Optional glob pattern to filter files
+ * @param options Optional: maxFiles, maxOutlineBytes, onProgress(processed, total)
  * @returns Object containing AST outline and dependency graph
  */
+export interface OutlinePathOptions {
+  maxFiles?: number;
+  maxOutlineBytes?: number;
+  onProgress?: (processed: number, total: number) => void;
+  /** Called during file discovery with the directory currently being scanned and total files found so far. */
+  onDiscovering?: (currentDir: string, filesFound: number) => void;
+}
+
 export function outlinePath(
   projectRoot: string,
   pathArg: string,
-  globPattern?: string | null
+  globPattern?: string | null,
+  options?: OutlinePathOptions
 ): { outline: string; truncated: boolean; dependencyGraph?: DependencyGraph } {
   getParser('js');
   const err = getOutlineLoadError();
@@ -190,14 +271,29 @@ export function outlinePath(
     };
   }
 
+  const maxFilesOpt = options?.maxFiles ?? MAX_FILES;
+  const maxBytesOpt = options?.maxOutlineBytes ?? MAX_OUTLINE_BYTES;
+
   const files: string[] = [];
   const stat = fs.statSync(resolved);
   if (stat.isFile()) {
     const ext = path.extname(resolved).slice(1).toLowerCase();
-    if (SUPPORTED_EXTENSIONS.has(ext)) files.push(resolved);
+    if (SUPPORTED_EXTENSIONS.has(ext)) {
+      files.push(resolved);
+      options?.onDiscovering?.(path.dirname(resolved), 1);
+    }
   } else {
-    collectFiles(resolved, projectRoot, globPattern ?? null, files);
+    collectFiles(
+      resolved,
+      projectRoot,
+      globPattern ?? null,
+      files,
+      maxFilesOpt,
+      (currentDir, count) => options?.onDiscovering?.(currentDir, count)
+    );
   }
+
+  options?.onProgress?.(0, files.length);
 
   const parts: string[] = [];
   let totalBytes = 0;
@@ -208,8 +304,9 @@ export function outlinePath(
   const allNodes: DependencyNode[] = [];
   const processedFiles = new Set<string>();
 
-  for (const fullPath of files) {
-    if (totalBytes >= MAX_OUTLINE_BYTES) {
+  for (let i = 0; i < files.length; i++) {
+    const fullPath = files[i];
+    if (totalBytes >= maxBytesOpt) {
       truncated = true;
       break;
     }
@@ -222,10 +319,10 @@ export function outlinePath(
       const block = formatOutline(rel, entries);
       if (
         totalBytes + Buffer.byteLength(block, 'utf-8') + 2 >
-        MAX_OUTLINE_BYTES
+        maxBytesOpt
       ) {
         parts.push(
-          block.slice(0, MAX_OUTLINE_BYTES - totalBytes - 20) + '\n(truncated)'
+          block.slice(0, maxBytesOpt - totalBytes - 20) + '\n(truncated)'
         );
         truncated = true;
         break;
@@ -250,6 +347,7 @@ export function outlinePath(
     } catch {
       parts.push(`${rel}: (parse/read error)`);
     }
+    options?.onProgress?.(i + 1, files.length);
   }
 
   if (allEdges.length > 0 || allNodes.length > 0) {
