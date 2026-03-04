@@ -15,41 +15,58 @@
  */
 
 import React from 'react';
-import { Box, Tabs, ScrollArea, Group, Text } from '@mantine/core';
+import { Box, Text } from '@mantine/core';
 import { GitDiffFile } from '../../shared/types';
+import './DiffViewer.css';
 import { ChangedFilesList } from './ChangedFilesList';
 import { HunkViewer } from './HunkViewer';
+import type { DiffComment } from '../../shared/types';
 
 interface DiffViewerProps {
   diffFiles: GitDiffFile[];
   activeFile: string | null;
   onFileSelect: (file: string) => void;
+  sessionId: string | null;
+  comments: DiffComment[];
+  onCommentAdded: () => void;
 }
 
-export function DiffViewer({ diffFiles, activeFile, onFileSelect }: DiffViewerProps) {
+export function DiffViewer({
+  diffFiles,
+  activeFile,
+  onFileSelect,
+  sessionId,
+  comments,
+  onCommentAdded,
+}: DiffViewerProps) {
   return (
-    <Box style={{ display: 'flex', height: 'calc(100vh - 100px)' }}>
-      <Box style={{ width: '300px', borderRight: '1px solid #e0e0e0', overflowY: 'auto' }}>
-        <ChangedFilesList 
-          diffFiles={diffFiles} 
-          activeFile={activeFile} 
-          onFileSelect={onFileSelect} 
+    <Box className="diff-viewer-code-review" style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+      <Box style={{ width: '420px', minWidth: '320px', borderRight: '1px solid var(--app-border)', overflowY: 'auto' }}>
+        <ChangedFilesList
+          diffFiles={diffFiles}
+          activeFile={activeFile}
+          onFileSelect={onFileSelect}
         />
       </Box>
       <Box style={{ flex: 1, overflow: 'hidden' }}>
         {activeFile ? (
-          <HunkViewer 
-            diffFiles={diffFiles} 
-            activeFile={activeFile} 
+          <HunkViewer
+            diffFiles={diffFiles}
+            activeFile={activeFile}
+            sessionId={sessionId}
+            comments={comments}
+            onCommentAdded={onCommentAdded}
           />
         ) : (
-          <Box style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            alignItems: 'center', 
-            height: '100%', 
-            color: '#666' 
-          }}>
+          <Box
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100%',
+              color: 'var(--app-text-muted)',
+            }}
+          >
             <Text>Select a file to view changes</Text>
           </Box>
         )}

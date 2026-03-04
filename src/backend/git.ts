@@ -436,47 +436,44 @@ export function getGitDiff(repoPath: string = '.'): GitDiffFile[] {
       const lines = diffOutput.split('\n');
 
       let currentHunk: GitDiffHunk | null = null;
+      let nextTargetLine = 1;
+      let nextSourceLine = 1;
 
       for (const line of lines) {
         if (line.startsWith('@@')) {
-          // Start of new hunk
+          // Start of new hunk: parse header and reset running line numbers
           currentHunk = { header: line, lines: [] };
           hunks.push(currentHunk);
+          nextTargetLine = getLineNumFromHunkHeader(line, true);
+          nextSourceLine = getLineNumFromHunkHeader(line, false);
         } else if (currentHunk) {
           if (line.startsWith('+')) {
-            // Added line (target file)
-            const lineNumber = getLineNumFromHunkHeader(currentHunk.header, true);
+            // Added line (target file only)
             currentHunk.lines.push({
               type: 'add',
               content: line.substring(1),
-              lineNumber,
+              lineNumber: nextTargetLine,
             });
-            // Update line number for next line
-            currentHunk.lines[currentHunk.lines.length - 1].lineNumber++;
+            nextTargetLine++;
           } else if (line.startsWith('-')) {
-            // Removed line (source file)
-            const lineNumber = getLineNumFromHunkHeader(currentHunk.header, false);
+            // Removed line (source file only; target side does not advance)
             currentHunk.lines.push({
               type: 'remove',
               content: line.substring(1),
-              lineNumber,
-              oldLineNumber: lineNumber,
+              lineNumber: nextTargetLine,
+              oldLineNumber: nextSourceLine,
             });
-            // Update line number for next line
-            currentHunk.lines[currentHunk.lines.length - 1].oldLineNumber++;
+            nextSourceLine++;
           } else if (line.startsWith(' ')) {
-            // Context line
-            const targetLineNum = getLineNumFromHunkHeader(currentHunk.header, true);
-            const sourceLineNum = getLineNumFromHunkHeader(currentHunk.header, false);
+            // Context line (in both files)
             currentHunk.lines.push({
               type: 'context',
               content: line.substring(1),
-              lineNumber: targetLineNum,
-              oldLineNumber: sourceLineNum,
+              lineNumber: nextTargetLine,
+              oldLineNumber: nextSourceLine,
             });
-            // Update line numbers for next line
-            currentHunk.lines[currentHunk.lines.length - 1].lineNumber++;
-            currentHunk.lines[currentHunk.lines.length - 1].oldLineNumber++;
+            nextTargetLine++;
+            nextSourceLine++;
           }
           // Ignore other lines like \ No newline at end of file
         }

@@ -15,7 +15,7 @@
  */
 
 import React from 'react';
-import { Box, Text, Group } from '@mantine/core';
+import { Box, Text } from '@mantine/core';
 import { GitDiffLine } from '../../shared/types';
 
 interface DiffLineProps {
@@ -25,19 +25,19 @@ interface DiffLineProps {
 export function DiffLine({ line }: DiffLineProps) {
   let bgColor = 'transparent';
   let borderLeft = '2px solid transparent';
-  
+
   switch (line.type) {
     case 'add':
-      bgColor = '#d4edda';
-      borderLeft = '2px solid #28a745';
+      bgColor = 'var(--app-success-bg)';
+      borderLeft = '2px solid var(--app-success-border)';
       break;
     case 'remove':
-      bgColor = '#f8d7da';
-      borderLeft = '2px solid #dc3545';
+      bgColor = 'var(--app-danger-bg)';
+      borderLeft = '2px solid var(--app-danger-text)';
       break;
     case 'context':
-      bgColor = '#f8f9fa';
-      borderLeft = '2px solid #6c757d';
+      bgColor = 'var(--app-hover)';
+      borderLeft = '2px solid var(--app-context-border)';
       break;
   }
 
@@ -46,19 +46,17 @@ export function DiffLine({ line }: DiffLineProps) {
       style={{
         display: 'flex',
         backgroundColor: bgColor,
-        borderLeft: borderLeft,
-        padding: '4px 8px',
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        lineHeight: '1.4',
+        borderLeft,
+        padding: '3px 10px',
+        lineHeight: 1.5,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
       }}
     >
-      <Text style={{ color: '#666', minWidth: '50px', marginRight: '10px' }}>
+      <Text style={{ color: 'var(--app-text-muted)', minWidth: '44px', marginRight: '12px', flexShrink: 0 }}>
         {line.lineNumber}
       </Text>
-      <Text>
+      <Text component="span" style={{ fontFamily: 'inherit', fontSize: 'inherit' }}>
         {line.content}
       </Text>
     </Box>

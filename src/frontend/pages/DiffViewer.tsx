@@ -14,15 +14,44 @@
  * limitations under the License.
  */
 
-import React, { useState } from 'react';
-import { Box, Loader, Text, Group, Title } from '@mantine/core';
+import React, { useEffect, useState } from 'react';
+import { Box, Loader, Text, Title, Button, Group, Alert } from '@mantine/core';
 import { trpc } from '../../client/trpc';
 import { DiffViewer } from '../components/DiffViewer';
+import { ReviewAssistantPanel } from '../components/ReviewAssistantPanel';
+
+const CARD_STYLE: React.CSSProperties = {
+  backgroundColor: 'var(--app-surface)',
+  border: '1px solid var(--app-border)',
+  borderRadius: 8,
+  boxShadow: '0 2px 8px var(--app-shadow)',
+  overflow: 'hidden',
+};
 
 export function DiffViewerPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  
+  const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
+
   const { data: diffFiles, isLoading, error } = trpc.git.getGitDiff.useQuery();
+  const utils = trpc.useUtils();
+  const createReviewChatSession = trpc.sessions.create.useMutation({
+    onSuccess: (session) => setReviewChatSessionId(session.id),
+  });
+  const { data: reviewSession, refetch: refetchReview } = trpc.review.getOrCreateSession.useQuery(
+    undefined,
+    { enabled: !!diffFiles && diffFiles.length > 0 }
+  );
+  const startReviewMutation = trpc.review.startReviewSession.useMutation({
+    onSuccess: () => {
+      utils.review.getOrCreateSession.invalidate();
+      refetchReview();
+    },
+  });
+
+  useEffect(() => {
+    if (diffFiles?.length && !reviewChatSessionId)
+      createReviewChatSession.mutate({ title: 'Code review' });
+  }, [diffFiles?.length, reviewChatSessionId]);
 
   if (isLoading) {
     return (
@@ -51,13 +80,86 @@ export function DiffViewerPage() {
   }
 
   return (
-    <Box style={{ padding: '20px' }}>
-      <Title order={2}>Git Changes</Title>
-      <DiffViewer 
-        diffFiles={diffFiles} 
-        activeFile={activeFile} 
-        onFileSelect={setActiveFile} 
-      />
+    <Box
+      style={{
+        padding: '20px',
+        display: 'flex',
+        flexDirection: 'column',
+        height: 'calc(100vh - 60px)',
+        minHeight: 0,
+        gap: 16,
+      }}
+    >
+      {/* Top panel: Git changes / diff (~75%) */}
+      <Box
+        style={{
+          ...CARD_STYLE,
+          flex: 3,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <Group
+          justify="space-between"
+          align="flex-end"
+          wrap="wrap"
+          gap="sm"
+          style={{ padding: '12px 16px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}
+        >
+          <Box>
+            <Title order={3}>Git Changes</Title>
+            <Text size="sm" c="dimmed" mt={4}>
+              {reviewSession
+                ? 'Review session active — click any line to add a comment.'
+                : 'Start a review to add comments on specific lines.'}
+            </Text>
+          </Box>
+          {!reviewSession && (
+            <Button
+              onClick={() => startReviewMutation.mutate()}
+              loading={startReviewMutation.isPending}
+              disabled={!diffFiles?.length}
+            >
+              Start new review
+            </Button>
+          )}
+        </Group>
+        {startReviewMutation.isError && (
+          <Alert
+            color="red"
+            m="sm"
+            mx="md"
+            onClose={() => startReviewMutation.reset()}
+            style={{ flexShrink: 0 }}
+          >
+            {startReviewMutation.error.message}
+          </Alert>
+        )}
+        <Box style={{ flex: 1, minHeight: 0 }}>
+          <DiffViewer
+            diffFiles={diffFiles}
+            activeFile={activeFile}
+            onFileSelect={setActiveFile}
+            sessionId={reviewSession?.id ?? null}
+            comments={reviewSession?.comments ?? []}
+            onCommentAdded={refetchReview}
+          />
+        </Box>
+      </Box>
+
+      {/* Bottom panel: Assistant chat (~25%) */}
+      <Box
+        style={{
+          ...CARD_STYLE,
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <ReviewAssistantPanel sessionId={reviewChatSessionId} />
+      </Box>
     </Box>
   );
 }

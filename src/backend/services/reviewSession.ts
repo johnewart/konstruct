@@ -97,7 +97,7 @@ export class ReviewSessionManager {
           const startLine = parseInt(headerMatch[1], 10);
           
           // Count the number of added lines in this hunk
-          const addedLines = hunk.lines.filter(line => line.type === 'added').length;
+          const addedLines = hunk.lines.filter(line => line.type === 'add').length;
           const endLine = startLine + addedLines;
           
           // Check if the line number falls within this range

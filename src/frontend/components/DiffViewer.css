@@ -1,4 +1,12 @@
-/* Diff Viewer Styles */
+/* Diff Viewer Styles – IBM Plex Mono */
+.diff-viewer-code-review {
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 14px;
+}
+
+.diff-viewer-code-review * {
+  font-family: inherit !important;
+}
 
 .diff-viewer {
   display: flex;
@@ -7,9 +15,9 @@
 
 .changed-files-list {
   width: 300px;
-  border-right: 1px solid #e0e0e0;
+  border-right: 1px solid var(--app-border);
   overflow-y: auto;
-  background-color: #fff;
+  background-color: var(--app-surface);
 }
 
 .changed-files-list .file-item {
@@ -21,12 +29,12 @@
 }
 
 .changed-files-list .file-item:hover {
-  background-color: #f8f9fa;
+  background-color: var(--app-hover);
 }
 
 .changed-files-list .file-item.active {
-  background-color: #e9ecef;
-  border: 1px solid #007bff;
+  background-color: var(--app-accent-bg);
+  border: 1px solid var(--app-accent);
 }
 
 .changed-files-list .file-status {
@@ -65,44 +73,42 @@
 }
 
 .hunk-header {
-  font-family: monospace;
-  font-size: 12px;
-  color: #666;
-  background-color: #f8f9fa;
-  padding: 5px 10px;
+  font-size: 14px;
+  color: var(--app-text-muted);
+  background-color: var(--app-hover);
+  padding: 4px 10px;
   border-radius: 4px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .diff-line {
   display: flex;
-  padding: 4px 8px;
-  font-family: monospace;
-  font-size: 12px;
-  line-height: 1.4;
+  padding: 3px 10px;
+  font-size: 14px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
 .diff-line-number {
-  color: #666;
-  min-width: 50px;
-  margin-right: 10px;
+  color: var(--app-text-muted);
+  min-width: 44px;
+  margin-right: 12px;
 }
 
 .diff-line.added {
-  background-color: #d4edda;
-  border-left: 2px solid #28a745;
+  background-color: var(--app-success-bg);
+  border-left: 2px solid var(--app-success-border);
 }
 
 .diff-line.removed {
-  background-color: #f8d7da;
-  border-left: 2px solid #dc3545;
+  background-color: var(--app-danger-bg);
+  border-left: 2px solid var(--app-danger-text);
 }
 
 .diff-line.context {
-  background-color: #f8f9fa;
-  border-left: 2px solid #6c757d;
+  background-color: var(--app-hover);
+  border-left: 2px solid var(--app-context-border);
 }
 
 .diff-line-content {
@@ -112,61 +118,14 @@
 .no-changes {
   text-align: center;
   padding: 40px;
-  color: #666;
+  color: var(--app-text-muted);
 }
 
 .diff-file-title {
   margin-bottom: 15px;
-  color: #333;
+  color: var(--app-text-heading);
 }
 
 /* Dark mode adjustments */
 
-[data-theme="dark"] .changed-files-list {
-  background-color: #1e1e1e;
-  border-right-color: #333;
-}
-
-[data-theme="dark"] .file-item:hover {
-  background-color: #2d2d2d;
-}
-
-[data-theme="dark"] .file-item.active {
-  background-color: #2a2a2a;
-}
-
-[data-theme="dark"] .file-status {
-  background-color: #6c757d;
-}
-
-[data-theme="dark"] .hunk-header {
-  background-color: #2d2d2d;
-  color: #ccc;
-}
-
-[data-theme="dark"] .diff-line.added {
-  background-color: #1b4332;
-  border-left-color: #28a745;
-}
-
-[data-theme="dark"] .diff-line.removed {
-  background-color: #451a1a;
-  border-left-color: #dc3545;
-}
-
-[data-theme="dark"] .diff-line.context {
-  background-color: #2a2a2a;
-  border-left-color: #6c757d;
-}
-
-[data-theme="dark"] .diff-line-number {
-  color: #aaa;
-}
-
-[data-theme="dark"] .no-changes {
-  color: #ccc;
-}
-
-[data-theme="dark"] .diff-file-title {
-  color: #eee;
-}
+/* Dark mode uses same CSS variables from index.css; no overrides needed */

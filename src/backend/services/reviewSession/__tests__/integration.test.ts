@@ -30,22 +30,23 @@ describe('Integration: Full Workflow', () => {
     // Restore original randomUUID
     crypto.randomUUID = originalRandomUUID;
 
-    // Mock getGitDiff with sample diff (sync)
+    // Mock getGitDiff with sample diff (sync). Use types 'add'|'remove'|'context' and lineNumber for target side.
     vi.mocked(getGitDiff).mockReturnValue([
       {
         path: 'src/utils/config.ts',
+        status: 'M',
         hunks: [
           {
             header: '@@ -1,5 +1,5 @@',
             lines: [
-              { content: '-var config = {', type: 'removed' },
-              { content: '+const config = {', type: 'added' },
-              { content: '   timeout: 5000', type: 'unchanged' },
-              { content: ' };', type: 'unchanged' }
-            ]
-          }
-        ]
-      }
+              { content: '-var config = {', type: 'remove', lineNumber: 1, oldLineNumber: 1 },
+              { content: '+const config = {', type: 'add', lineNumber: 1 },
+              { content: '   timeout: 5000', type: 'context', lineNumber: 2, oldLineNumber: 2 },
+              { content: ' };', type: 'context', lineNumber: 3, oldLineNumber: 3 },
+            ],
+          },
+        ],
+      },
     ]);
 
     // Mock agent-worker call
