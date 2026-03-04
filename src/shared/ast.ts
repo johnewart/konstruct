@@ -20,6 +20,10 @@
  * without a circular dependency.
  */
 
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
 export type TSNode = {
   type: string;
   startPosition: { row: number };
@@ -74,7 +78,8 @@ export function getParser(
       const p = new ParserClass!();
       p.setLanguage(load());
       parserCache[ext] = p;
-    } catch {
+    } catch (e) {
+      loadError = e instanceof Error ? e : new Error(String(e));
       return null;
     }
   }

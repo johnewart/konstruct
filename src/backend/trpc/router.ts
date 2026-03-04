@@ -25,6 +25,7 @@ import { projectsRouter } from '../routers/projects';
 import { providerConfigRouter } from '../routers/providerConfig';
 import { reviewRouter } from '../routers/review';
 import { githubRouter } from '../routers/github';
+import { codebaseRouter } from '../routers/codebase';
 
 export const appRouter = router({
   documents: documentsRouter,
@@ -37,6 +38,7 @@ export const appRouter = router({
   providerConfig: providerConfigRouter,
   review: reviewRouter,
   github: githubRouter,
+  codebase: codebaseRouter,
 });
 
 export type AppRouter = typeof appRouter;

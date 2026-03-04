@@ -39,6 +39,7 @@ import { ConfigurationPage } from './pages/Configuration';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
 import { DiffViewerPage } from './pages/DiffViewer';
+import { CodeExplorerPage } from './pages/CodeExplorerPage';
 import { PullRequestsPage } from './pages/PullRequestsPage';
 import './index.css';
 
@@ -118,6 +119,7 @@ function TopNav() {
   const isCli = location.pathname === '/cli';
   const isDiff = location.pathname === '/diff';
   const isPr = location.pathname === '/pr';
+  const isCodeExplorer = location.pathname === '/code-explorer';
 
   return (
     <Group
@@ -186,6 +188,17 @@ function TopNav() {
         >
           Pull requests
         </Link>
+        <Link
+          to="/code-explorer"
+          style={{
+            fontWeight: isCodeExplorer ? 600 : 400,
+            color: 'var(--app-text)',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          Code explorer
+        </Link>
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
@@ -219,6 +232,7 @@ function App() {
           <Route path="/cli" element={<FallbackCli />} />
           <Route path="/diff" element={<DiffViewerPage />} />
           <Route path="/pr" element={<PullRequestsPage />} />
+          <Route path="/code-explorer" element={<CodeExplorerPage />} />
         </Routes>
       </Box>
     </BrowserRouter>
