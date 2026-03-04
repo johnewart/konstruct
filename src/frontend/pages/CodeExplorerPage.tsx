@@ -67,7 +67,7 @@ export function CodeExplorerPage() {
   const truncated = data?.truncated ?? false;
 
   return (
-    <Stack p="md" gap="md" style={{ height: 'calc(100vh - var(--app-topnav-height) - 32px)', minHeight: 0 }}>
+    <Stack p="md" gap="md" style={{ height: '100%', minHeight: 0, boxSizing: 'border-box' }}>
       <Group justify="space-between" wrap="nowrap">
         <Title order={3}>Code explorer</Title>
         <Group wrap="nowrap" gap="xs">

@@ -32,7 +32,7 @@ import {
   Select,
 } from '@mantine/core';
 import { useMantineColorScheme, useComputedColorScheme } from '@mantine/core';
-import { IconSun, IconMoon } from '@tabler/icons-react';
+import { IconSun, IconMoon, IconTerminal, IconSettings } from '@tabler/icons-react';
 import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
 import { ConfigurationPage } from './pages/Configuration';
@@ -51,6 +51,7 @@ function ThemeToggle() {
       <ActionIcon
         variant="subtle"
         size="lg"
+        color="blue"
         onClick={() => toggleColorScheme()}
         aria-label={
           computed === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
@@ -61,6 +62,8 @@ function ThemeToggle() {
     </Tooltip>
   );
 }
+
+const ACTIVE_PROJECT_STORAGE_KEY = 'konstruct-active-project-id';
 
 function TopNavProjectSelector() {
   const utils = trpc.useUtils();
@@ -81,6 +84,12 @@ function TopNavProjectSelector() {
     },
   });
 
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    const id = active?.id ?? '';
+    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, id);
+  }, [active?.id]);
+
   const options = [
     { value: '', label: 'No project' },
     ...projects.map((p) => ({ value: p.id, label: p.name })),
@@ -90,6 +99,9 @@ function TopNavProjectSelector() {
     <Select
       value={active?.id ?? ''}
       onChange={(value) => {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, value ?? '');
+        }
         setActive.mutate({ projectId: value === '' ? null : value });
       }}
       data={options}
@@ -131,78 +143,98 @@ function TopNav() {
         background: 'var(--app-surface)',
       }}
     >
-      <Group gap="md">
-        <Link
+      <Group gap={0} style={{ alignItems: 'stretch' }}>
+        <Box
+          component={Link}
           to="/"
           style={{
-            fontWeight: isChat ? 600 : 400,
+            fontWeight: isChat ? 600 : 500,
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
+            paddingRight: 16,
+            marginRight: 16,
+            borderRight: '1px solid var(--app-border)',
+            display: 'flex',
+            alignItems: 'center',
           }}
         >
           Chat
-        </Link>
-
-        <Link
-          to="/config"
-          style={{
-            fontWeight: isConfig ? 600 : 400,
-            color: 'var(--app-text)',
-            textDecoration: 'none',
-            fontSize: 14,
-          }}
-        >
-          Configuration
-        </Link>
-        <Link
-          to="/cli"
-          style={{
-            fontWeight: isCli ? 600 : 400,
-            color: 'var(--app-text)',
-            textDecoration: 'none',
-            fontSize: 14,
-          }}
-        >
-          CLI
-        </Link>
-        <Link
+        </Box>
+        <Box
+          component={Link}
           to="/diff"
           style={{
-            fontWeight: isDiff ? 600 : 400,
+            fontWeight: isDiff ? 600 : 500,
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
+            paddingRight: 16,
+            marginRight: 16,
+            borderRight: '1px solid var(--app-border)',
+            display: 'flex',
+            alignItems: 'center',
           }}
         >
-          Diff
-        </Link>
-        <Link
+          Local Changes
+        </Box>
+        <Box
+          component={Link}
           to="/pr"
           style={{
-            fontWeight: isPr ? 600 : 400,
+            fontWeight: isPr ? 600 : 500,
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
+            paddingRight: 16,
+            marginRight: 16,
+            borderRight: '1px solid var(--app-border)',
+            display: 'flex',
+            alignItems: 'center',
           }}
         >
           Pull requests
-        </Link>
-        <Link
+        </Box>
+        <Box
+          component={Link}
           to="/code-explorer"
           style={{
-            fontWeight: isCodeExplorer ? 600 : 400,
+            fontWeight: isCodeExplorer ? 600 : 500,
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
+            display: 'flex',
+            alignItems: 'center',
           }}
         >
           Code explorer
-        </Link>
+        </Box>
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
         <ThemeToggle />
+        <Tooltip label="Configuration">
+          <ActionIcon
+            component={Link}
+            to="/config"
+            variant={isConfig ? 'light' : 'subtle'}
+            color="blue"
+            aria-label="Configuration"
+          >
+            <IconSettings size={18} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Shell">
+          <ActionIcon
+            component={Link}
+            to="/cli"
+            variant={isCli ? 'light' : 'subtle'}
+            color="blue"
+            aria-label="Shell"
+          >
+            <IconTerminal size={18} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
     </Group>
   );
@@ -215,25 +247,38 @@ function App() {
         component="div"
         style={{
           position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100vh',
+          overflow: 'hidden',
           ['--app-topnav-height' as string]: '52px',
         }}
       >
         <TopNav />
-        <Routes>
-          <Route path="/" element={<Chat />} />
-          <Route path="/chat" element={<Navigate to="/" replace />} />
-          <Route path="/chat/:sessionId" element={<Chat />} />
-          <Route path="/doc/:id" element={<DocumentPage />} />
-          <Route path="/config" element={<ConfigurationPage />} />
-          <Route path="/runpod" element={<Navigate to="/config?tab=runpod" replace />} />
-          <Route path="/vms" element={<Navigate to="/config?tab=vms" replace />} />
-          <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
-          <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
-          <Route path="/cli" element={<FallbackCli />} />
-          <Route path="/diff" element={<DiffViewerPage />} />
-          <Route path="/pr" element={<PullRequestsPage />} />
-          <Route path="/code-explorer" element={<CodeExplorerPage />} />
-        </Routes>
+        <Box
+          component="main"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+          }}
+        >
+          <Routes>
+            <Route path="/" element={<Chat />} />
+            <Route path="/chat" element={<Navigate to="/" replace />} />
+            <Route path="/chat/:sessionId" element={<Chat />} />
+            <Route path="/doc/:id" element={<DocumentPage />} />
+            <Route path="/config" element={<ConfigurationPage />} />
+            <Route path="/runpod" element={<Navigate to="/config?tab=runpod" replace />} />
+            <Route path="/vms" element={<Navigate to="/config?tab=vms" replace />} />
+            <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
+            <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
+            <Route path="/cli" element={<FallbackCli />} />
+            <Route path="/diff" element={<DiffViewerPage />} />
+            <Route path="/pr" element={<PullRequestsPage />} />
+            <Route path="/code-explorer" element={<CodeExplorerPage />} />
+          </Routes>
+        </Box>
       </Box>
     </BrowserRouter>
   );

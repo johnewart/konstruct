@@ -46,6 +46,12 @@ const links = [
   httpBatchLink({
     url: '/trpc',
     methodOverride: 'POST',
+    headers() {
+      const projectId = typeof localStorage !== 'undefined'
+        ? localStorage.getItem('konstruct-active-project-id') ?? ''
+        : '';
+      return projectId ? { 'X-Active-Project-Id': projectId } : {};
+    },
   }),
 ];
 

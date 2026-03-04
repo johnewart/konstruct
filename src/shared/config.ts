@@ -385,6 +385,28 @@ export function getActiveProjectRoot(): string | null {
 }
 
 /**
+ * Get project root path by project id from global config (read from disk).
+ * Returns null if id is empty, project not found, or not local.
+ */
+export function getProjectRootById(projectId: string): string | null {
+  const id = projectId?.trim();
+  if (!id) return null;
+  const globalPath = getGlobalConfigPath();
+  if (!existsSync(globalPath)) return null;
+  try {
+    const content = readFileSync(globalPath, 'utf-8');
+    const parsed = parse(content) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const projects = parsed.projects as Array<{ id?: string; location?: { type?: string; path?: string } }> | undefined;
+    const project = Array.isArray(projects) ? projects.find((p) => p?.id === id) : undefined;
+    if (!project?.location?.path || project.location.type !== 'local') return null;
+    return path.resolve(project.location.path);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get the active project root by reading config from disk (no cache).
  * Use when the active project may have just changed (e.g. per-request context).
  */

@@ -110,7 +110,7 @@ export function PullRequestsPage() {
 
   useEffect(() => {
     if (githubRepo && !reviewChatSessionId) {
-      createReviewChatSession.mutate({ title: 'PR review' });
+      createReviewChatSession.mutate({ title: 'PR review', ephemeral: true });
     }
   }, [githubRepo, reviewChatSessionId]);
 
@@ -236,9 +236,10 @@ export function PullRequestsPage() {
     <Box
       style={{
         padding: '20px',
+        boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'row',
-        height: 'calc(100vh - 60px)',
+        height: '100%',
         minHeight: 0,
         gap: 16,
       }}
@@ -396,13 +397,13 @@ export function PullRequestsPage() {
                       <Text size="md" mb="md" c="dimmed">{overviewData.overview.summary}</Text>
                       {overviewData.overview.keyFiles.length > 0 && (
                         <Stack gap="xs" mb="md">
-                          <Text size="md" fw={600}>Key files</Text>
-                          <List size="md" spacing="xs">
+                          <Text size="lg" fw={600}>Key files</Text>
+                          <List size="lg" spacing="xs">
                             {overviewData.overview.keyFiles.map((k) => (
                               <List.Item key={k.path}>
                                 <LevelBadge level={normalizeLevel(k.dangerLevel)} />
-                                <Text component="span" size="md" ml="xs">{k.path}</Text>
-                                {k.reason && <Text size="sm" c="dimmed" ml="xs">{k.reason}</Text>}
+                                <Text component="span" size="lg" ml="xs">{k.path}</Text>
+                                {k.reason && <Text size="md" c="dimmed" ml="xs">{k.reason}</Text>}
                               </List.Item>
                             ))}
                           </List>

@@ -73,8 +73,8 @@ export function resolveProjectId(projectRoot: string): string {
   return getProjectIdForRoot(root) ?? '_default';
 }
 
-/** Global map: session ID -> { session, projectId }. Session ID is GUID, never collides. */
-const sessionById = new Map<string, { session: Session; projectId: string }>();
+/** Global map: session ID -> { session, projectId, ephemeral? }. Ephemeral sessions are never persisted. */
+const sessionById = new Map<string, { session: Session; projectId: string; ephemeral?: boolean }>();
 
 function getSessionFilePathForProject(sessionId: string, projectId: string): string {
   return path.join(
@@ -239,7 +239,11 @@ export function listSessions(projectId: string): Session[] {
   return out;
 }
 
-export function createSession(title: string, projectId: string): Session {
+export function createSession(
+  title: string,
+  projectId: string,
+  options?: { ephemeral?: boolean }
+): Session {
   const id = crypto.randomUUID();
   const now = new Date();
   const session: Session = {
@@ -250,9 +254,10 @@ export function createSession(title: string, projectId: string): Session {
     messages: [],
     todos: [],
   };
-  sessionById.set(id, { session, projectId });
-  log.info('createSession', id, session.title, projectId);
-  saveSessionToProject(session, projectId);
+  const ephemeral = options?.ephemeral ?? false;
+  sessionById.set(id, { session, projectId, ephemeral });
+  log.info('createSession', id, session.title, projectId, ephemeral ? '(ephemeral)' : '');
+  if (!ephemeral) saveSessionToProject(session, projectId);
   return session;
 }
 
@@ -265,7 +270,7 @@ export function updateSessionMessages(
   entry.session.messages = messages;
   entry.session.updatedAt = new Date();
   log.debug('updateSessionMessages', id, 'messages:', messages.length);
-  saveSessionToProject(entry.session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
   return entry.session;
 }
 
@@ -281,7 +286,7 @@ export function addMessage(
   entry.session.messages.push(message);
   entry.session.updatedAt = new Date();
   log.debug('addMessage', sessionId, message.role);
-  saveSessionToProject(entry.session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
   return entry.session;
 }
 
@@ -293,14 +298,14 @@ export function updateSessionTitle(
   if (!entry) return undefined;
   entry.session.title = title.trim() || 'Chat';
   entry.session.updatedAt = new Date();
-  saveSessionToProject(entry.session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
   return entry.session;
 }
 
 export function deleteSession(id: string): boolean {
   const entry = sessionById.get(id);
   const ok = sessionById.delete(id);
-  if (ok && entry) {
+  if (ok && entry && !entry.ephemeral) {
     try {
       const filePath = getSessionFilePathForProject(id, entry.projectId);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -341,7 +346,7 @@ export function addSuggestedFile(
   if (normalized && !session.suggestedFiles.includes(normalized)) {
     session.suggestedFiles.push(normalized);
     session.updatedAt = new Date();
-    saveSessionToProject(session, entry.projectId);
+    if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   }
   return session;
 }
@@ -361,7 +366,7 @@ export function addTodo(
   };
   session.todos.push(item);
   session.updatedAt = new Date();
-  saveSessionToProject(session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   return item;
 }
 
@@ -377,7 +382,7 @@ export function updateTodo(
   if (!t) return false;
   t.status = status;
   session.updatedAt = new Date();
-  saveSessionToProject(session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   return true;
 }
 
@@ -389,7 +394,7 @@ export function removeTodo(sessionId: string, todoId: string): boolean {
   if (i < 0) return false;
   session.todos.splice(i, 1);
   session.updatedAt = new Date();
-  saveSessionToProject(session, entry.projectId);
+  if (!entry.ephemeral) saveSessionToProject(session, entry.projectId);
   return true;
 }
 

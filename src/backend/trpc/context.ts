@@ -14,17 +14,28 @@
  * limitations under the License.
  */
 
-import { getActiveProjectRootFresh } from '../../shared/config';
+import {
+  getActiveProjectRootFresh,
+  getProjectRootById,
+} from '../../shared/config';
 
 export type AppContext = {
   projectRoot: string;
 };
 
-export const createContext = (): AppContext => {
-  const activeRoot = getActiveProjectRootFresh();
-  const projectRoot =
-    activeRoot ?? process.env.PROJECT_ROOT ?? process.cwd();
-  return { projectRoot };
+/** Options passed by the fetch adapter (req may be undefined for non-fetch). */
+type CreateContextOptions = { req?: Request };
+
+export const createContext = async (
+  opts?: CreateContextOptions
+): Promise<AppContext> => {
+  const projectId = opts?.req?.headers?.get?.('X-Active-Project-Id')?.trim();
+  let projectRoot: string | null =
+    projectId ? getProjectRootById(projectId) : null;
+  if (!projectRoot) projectRoot = getActiveProjectRootFresh();
+  const root =
+    projectRoot ?? process.env.PROJECT_ROOT ?? process.cwd();
+  return { projectRoot: root };
 };
 
 export type Context = Awaited<ReturnType<typeof createContext>>;

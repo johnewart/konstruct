@@ -236,6 +236,17 @@
   --app-context-border: #6c757d;
 }
 
+/* App shell: no page scroll; nav stays fixed, content fills remaining height */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+#root {
+  height: 100%;
+}
+
 body {
   font-family:
     'Satoshi',
@@ -513,12 +524,10 @@ body {
   color: var(--app-danger-text);
 }
 
-/* Chat layout: fixed height so the window doesn't expand; chat scrolls inside */
+/* Chat layout: fills app content area; chat scrolls inside */
 .chat-layout {
   display: flex;
-  height: calc(
-    100vh - 2 * clamp(12px, 2vw, 20px) - var(--app-topnav-height, 52px)
-  );
+  height: 100%;
   min-height: 0;
   width: 100%;
   max-width: 100%;

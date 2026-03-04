@@ -45,10 +45,17 @@ export const sessionsRouter = router({
   }),
 
   create: publicProcedure
-    .input(z.object({ title: z.string().optional() }))
+    .input(
+      z.object({
+        title: z.string().optional(),
+        ephemeral: z.boolean().optional(),
+      })
+    )
     .mutation(({ ctx, input }) => {
       const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
-      return sessionStore.createSession(input.title ?? 'Chat', projectId);
+      return sessionStore.createSession(input.title ?? 'Chat', projectId, {
+        ephemeral: input.ephemeral ?? false,
+      });
     }),
 
   get: publicProcedure
