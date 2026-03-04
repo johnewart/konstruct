@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import { getActiveProjectRoot } from '../../shared/config';
+import { getActiveProjectRootFresh } from '../../shared/config';
 
 export type AppContext = {
   projectRoot: string;
 };
 
 export const createContext = (): AppContext => {
-  const activeRoot = getActiveProjectRoot();
+  const activeRoot = getActiveProjectRootFresh();
   const projectRoot =
     activeRoot ?? process.env.PROJECT_ROOT ?? process.cwd();
   return { projectRoot };

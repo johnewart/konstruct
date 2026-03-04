@@ -19,7 +19,7 @@
  * .konstruct/config.yml overlay. Secrets via env vars or refs (env: or 1pass:).
  */
 
-import { loadConfig, loadGlobalConfig, loadProjectOnlyConfig, getProviderById, resolveProviderSecret, saveConfig } from './config';
+import { loadConfig, loadGlobalConfig, getProviderById, resolveProviderSecret, saveGlobalConfig } from './config';
 import type { ProviderModel } from './config';
 import { getDefaultPodId } from './runpodProject';
 
@@ -254,15 +254,7 @@ export function getAllProviders(projectRoot: string): {
 } {
   const c = loadConfig(projectRoot);
   const globalConfig = loadGlobalConfig();
-  const projectConfig = projectRoot ? loadProjectOnlyConfig(projectRoot) : null;
-  const globalProviders = globalConfig.providers ?? [];
-  const projectProviders = projectConfig?.providers ?? [];
-  const customProviderList = [...globalProviders];
-  for (const p of projectProviders) {
-    const i = customProviderList.findIndex((x) => (x.id ?? '').toLowerCase() === (p.id ?? '').toLowerCase());
-    if (i >= 0) customProviderList[i] = p;
-    else customProviderList.push(p);
-  }
+  const customProviderList = globalConfig.providers ?? [];
   const runpodEnv = getRunpodEnv(projectRoot);
   const customProviders: ProviderListItem[] = customProviderList.map((p) => {
     const type = (p.type ?? '').toLowerCase();
@@ -324,14 +316,14 @@ export function getContextWindowForModel(
   return m?.contextWindow;
 }
 
-/** Update the default provider in the config file (project or global). */
+/** Update the default provider in global config. */
 export function setDefaultProvider(providerId: string, projectRoot: string): void {
-  const config = loadConfig(projectRoot);
+  const config = loadGlobalConfig();
   const exists = config.providers?.some((p) => (p.id ?? '').toLowerCase() === providerId.toLowerCase());
   if (!exists) {
     throw new Error(`Invalid provider: ${providerId}. Add the provider in LLM Providers first.`);
   }
   config.llm = config.llm ?? {};
   config.llm.provider = providerId;
-  saveConfig(config, projectRoot);
+  saveGlobalConfig(config);
 }

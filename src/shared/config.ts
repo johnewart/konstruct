@@ -15,9 +15,9 @@
  */
 
 /**
- * Config loader: global ~/.config/konstruct/config.yml plus optional
- * project overlay .konstruct/config.yml (deep merge). Config stores
- * types and secret references (env: or 1pass:), not raw secrets.
+ * Config loader: global ~/.config/konstruct/config.yml only. No config is read from
+ * or written to the repository's .konstruct directory. Config stores types and
+ * secret references (env: or 1pass:), not raw secrets.
  */
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
@@ -96,6 +96,12 @@ export type KonstructConfig = {
     instance_id?: string;
     model?: string;
   };
+  /** GitHub integration: token stored centrally for PR listing etc. */
+  github?: {
+    token?: string;
+  };
+  /** Per-mode extended instructions appended to the system prompt for each assistant. */
+  modeInstructions?: Record<string, string>;
 };
 
 const defaultConfig: KonstructConfig = {
@@ -228,6 +234,12 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       return mapped;
     })(),
     runpod: raw.runpod as KonstructConfig['runpod'],
+    github: (() => {
+      const g = raw.github as Record<string, unknown> | undefined;
+      if (!g) return undefined;
+      const token = (g.token ?? '') as string;
+      return token ? { token: token.trim() } : undefined;
+    })(),
     vast: (() => {
       const v = raw.vast as Record<string, unknown> | undefined;
       if (!v) return undefined;
@@ -241,6 +253,15 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       raw.activeProjectId === undefined || raw.activeProjectId === null
         ? undefined
         : String(raw.activeProjectId).trim() || undefined,
+    modeInstructions: (() => {
+      const mi = raw.modeInstructions ?? raw.mode_instructions;
+      if (!mi || typeof mi !== 'object' || Array.isArray(mi)) return undefined;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(mi)) {
+        if (typeof v === 'string') out[String(k)] = v;
+      }
+      return Object.keys(out).length ? out : undefined;
+    })(),
     projects: (() => {
       const arr = raw.projects as Array<Record<string, unknown>> | undefined;
       if (!Array.isArray(arr)) return undefined;
@@ -303,6 +324,34 @@ export function saveGlobalConfig(config: KonstructConfig): void {
   cache.clear();
 }
 
+/** Get GitHub token from global config (backend only). */
+export function getGitHubToken(): string {
+  return loadGlobalConfig().github?.token?.trim() ?? '';
+}
+
+/** Get extended instructions for a mode (appended to system prompt). Empty string if none. */
+export function getModeInstructions(modeId: string): string {
+  const instructions = loadGlobalConfig().modeInstructions?.[modeId];
+  return typeof instructions === 'string' ? instructions.trim() : '';
+}
+
+/** Get all mode instructions (for UI). */
+export function getAllModeInstructions(): Record<string, string> {
+  const mi = loadGlobalConfig().modeInstructions;
+  return mi && typeof mi === 'object' && !Array.isArray(mi) ? { ...mi } : {};
+}
+
+/** Set extended instructions for a mode. */
+export function setModeInstructions(modeId: string, instructions: string): void {
+  const config = loadGlobalConfig();
+  const next = { ...(config.modeInstructions ?? {}) };
+  const trimmed = instructions.trim();
+  if (trimmed) next[modeId] = trimmed;
+  else delete next[modeId];
+  config.modeInstructions = Object.keys(next).length ? next : undefined;
+  saveGlobalConfig(config);
+}
+
 /**
  * Get the currently active project id from global config (if any).
  */
@@ -336,73 +385,43 @@ export function getActiveProjectRoot(): string | null {
 }
 
 /**
- * Load only the project config file (.konstruct/config.yml). No global merge.
- * Use when reading/writing project-scoped config (e.g. providers for this project).
+ * Get the active project root by reading config from disk (no cache).
+ * Use when the active project may have just changed (e.g. per-request context).
  */
-export function loadProjectOnlyConfig(projectRoot: string): KonstructConfig {
-  if (!projectRoot) return normalize({});
-  const projectPath = getProjectConfigPath(projectRoot);
-  if (!existsSync(projectPath)) return normalize({});
+export function getActiveProjectRootFresh(): string | null {
+  const globalPath = getGlobalConfigPath();
+  if (!existsSync(globalPath)) return null;
   try {
-    const content = readFileSync(projectPath, 'utf-8');
+    const content = readFileSync(globalPath, 'utf-8');
     const parsed = parse(content) as Record<string, unknown> | null;
-    return normalize(parsed && typeof parsed === 'object' ? parsed : {});
-  } catch (e) {
-    log.warn('Failed to load project-only config', projectPath, e);
-    return normalize({});
+    if (!parsed || typeof parsed !== 'object') return null;
+    const id = (parsed.activeProjectId as string)?.trim();
+    if (!id) return null;
+    const projects = parsed.projects as Array<{ id?: string; location?: { type?: string; path?: string } }> | undefined;
+    const project = Array.isArray(projects) ? projects.find((p) => p?.id === id) : undefined;
+    if (!project?.location?.path || project.location.type !== 'local') return null;
+    return path.resolve(project.location.path);
+  } catch {
+    return null;
   }
 }
 
-/**
- * Save config to the project file only (.konstruct/config.yml).
- * Creates .konstruct directory if needed. Clears that project's merged cache.
- */
-export function saveProjectConfig(config: KonstructConfig, projectRoot: string): void {
-  if (!projectRoot) return;
-  const projectPath = getProjectConfigPath(projectRoot);
-  const dir = path.dirname(projectPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const obj = config as unknown as Record<string, unknown>;
-  writeFileSync(projectPath, stringify(obj), 'utf-8');
-  cache.delete(projectRoot);
+/** No longer used: config is not stored in the repo. Returns default config. */
+export function loadProjectOnlyConfig(_projectRoot: string): KonstructConfig {
+  return normalize({});
+}
+
+/** No-op: config is not stored in the repository's .konstruct directory. */
+export function saveProjectConfig(_config: KonstructConfig, _projectRoot: string): void {
+  // Intentionally do not write to repo
 }
 
 /**
- * Load config for a project: global config then project overlay (deep merge).
- * Global: ~/.config/konstruct/config.yml
- * Project: <projectRoot>/.konstruct/config.yml (overrides global when present).
+ * Load config for a project. Only global config is used; no config is read from
+ * the repository's .konstruct directory (so the repo stays free of config data).
  */
 export function loadConfig(projectRoot: string): KonstructConfig {
-  const cacheKey = projectRoot || '__global__';
-  const cached = cache.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  let raw: Record<string, unknown> = {};
-  const globalPath = getGlobalConfigPath();
-  if (existsSync(globalPath)) {
-    try {
-      const content = readFileSync(globalPath, 'utf-8');
-      const parsed = parse(content) as Record<string, unknown> | null;
-      if (parsed && typeof parsed === 'object') raw = parsed;
-    } catch (e) {
-      log.warn('Failed to load global config', globalPath, e);
-    }
-  }
-
-  const projectPath = getProjectConfigPath(projectRoot);
-  if (projectRoot && existsSync(projectPath)) {
-    try {
-      const content = readFileSync(projectPath, 'utf-8');
-      const parsed = parse(content) as Record<string, unknown> | null;
-      if (parsed && typeof parsed === 'object') raw = deepMerge(raw, parsed);
-    } catch (e) {
-      log.warn('Failed to load project config', projectPath, e);
-    }
-  }
-
-  const config = normalize(raw);
-  cache.set(cacheKey, config);
-  return config;
+  return loadGlobalConfig();
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -449,17 +468,9 @@ export async function resolveProviderSecret(
 }
 
 /**
- * Save config to project or global path. Writes only non-sensitive fields.
- * If projectRoot is set and project config exists, writes there; otherwise global.
+ * Save config. Only the global config file is written; no config is stored in
+ * the repository's .konstruct directory.
  */
-export function saveConfig(config: KonstructConfig, projectRoot: string): void {
-  const projectPath = getProjectConfigPath(projectRoot);
-  const globalPath = getGlobalConfigPath();
-  const writePath =
-    projectRoot && existsSync(projectPath) ? projectPath : globalPath;
-  const dir = path.dirname(writePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const obj = config as unknown as Record<string, unknown>;
-  writeFileSync(writePath, stringify(obj), 'utf-8');
-  cache.delete(projectRoot || '__global__');
+export function saveConfig(config: KonstructConfig, _projectRoot: string): void {
+  saveGlobalConfig(config);
 }

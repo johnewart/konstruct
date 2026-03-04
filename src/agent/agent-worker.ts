@@ -171,6 +171,7 @@ const server = http.createServer(async (req, res) => {
         providerId?: string;
         model?: string;
         projectRoot?: string;
+        prContextText?: string;
       };
       if (!body?.sessionId || !body?.content) {
         sendJson(res, 400, { error: 'sessionId and content required' });
@@ -197,6 +198,7 @@ const server = http.createServer(async (req, res) => {
         model: body.model,
         progressStore,
         signal: controller.signal,
+        ...(body.prContextText ? { prContextText: body.prContextText } : {}),
       })
         .then(() => {
           abortControllersBySession.delete(sessionId);

@@ -17,12 +17,7 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import {
-  loadGlobalConfig,
-  saveGlobalConfig,
-  loadProjectOnlyConfig,
-  saveProjectConfig,
-} from '../../shared/config';
+import { loadGlobalConfig, saveGlobalConfig } from '../../shared/config';
 import type { ConfigProvider, ProviderModel } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
 import * as listProviderModels from '../services/listProviderModels';
@@ -63,30 +58,11 @@ const providerInputSchema = z.object({
 });
 
 export const providerConfigRouter = router({
-  /** List providers by scope: global + per-project (for known projects with local path). */
+  /** List providers from global config only (no config stored in repo .konstruct). */
   list: publicProcedure.query(() => {
     const globalConfig = loadGlobalConfig();
     const global = globalConfig.providers ?? [];
-    const projects = globalConfig.projects ?? [];
-    const byProject: Array<{
-      projectId: string;
-      projectName: string;
-      path: string;
-      providers: ConfigProvider[];
-    }> = [];
-    for (const proj of projects) {
-      if (proj.location.type !== 'local') continue;
-      const path = proj.location.path;
-      const projectConfig = loadProjectOnlyConfig(path);
-      const providers = projectConfig.providers ?? [];
-      byProject.push({
-        projectId: proj.id,
-        projectName: proj.name,
-        path,
-        providers,
-      });
-    }
-    return { global, projects: byProject };
+    return { global, projects: [] };
   }),
 
   add: publicProcedure
@@ -97,23 +73,13 @@ export const providerConfigRouter = router({
       })
     )
     .mutation(({ input }) => {
+      const config = loadGlobalConfig();
+      const existing = config.providers ?? [];
       const isClaudeCli = input.provider.type.trim().toLowerCase() === 'claude_cli';
-      let id: string;
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const existing = config.providers ?? [];
-        id = isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
+      const id =
+        isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
           ? 'claude_cli'
           : randomUUID();
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const existing = config.providers ?? [];
-        id = isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
-          ? 'claude_cli'
-          : randomUUID();
-      }
       const provider: ConfigProvider = {
         id,
         name: input.provider.name.trim(),
@@ -129,21 +95,9 @@ export const providerConfigRouter = router({
         max_tokens: input.provider.max_tokens,
         temperature: input.provider.temperature,
       };
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = config.providers ?? [];
-        providers.push(provider);
-        config.providers = providers;
-        saveGlobalConfig(config);
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = config.providers ?? [];
-        providers.push(provider);
-        config.providers = providers;
-        saveProjectConfig(config, path);
-      }
+      existing.push(provider);
+      config.providers = existing;
+      saveGlobalConfig(config);
       log.debug('add provider', id, input.scope);
       return provider;
     }),
@@ -157,57 +111,29 @@ export const providerConfigRouter = router({
       })
     )
     .mutation(({ input }) => {
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = config.providers ?? [];
-        const index = providers.findIndex((p) => p.id === input.id);
-        if (index === -1) throw new Error('Provider not found');
-        const existing = providers[index];
-        providers[index] = {
-          ...existing,
-          name: input.provider.name?.trim() ?? existing.name,
-          type: input.provider.type?.trim() ?? existing.type,
-          secret_ref: input.provider.secret_ref !== undefined ? input.provider.secret_ref?.trim() : existing.secret_ref,
-          base_url: input.provider.base_url !== undefined ? input.provider.base_url?.trim() : existing.base_url,
-          default_model: input.provider.default_model !== undefined ? input.provider.default_model?.trim() : existing.default_model,
-          endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
-          aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
-          runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
-          claude_cli_path: input.provider.claude_cli_path !== undefined ? input.provider.claude_cli_path?.trim() : existing.claude_cli_path,
-          models: input.provider.models !== undefined ? input.provider.models : existing.models,
-          max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
-          temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,
-        };
-        config.providers = providers;
-        saveGlobalConfig(config);
-        return providers[index];
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = config.providers ?? [];
-        const index = providers.findIndex((p) => p.id === input.id);
-        if (index === -1) throw new Error('Provider not found');
-        const existing = providers[index];
-        providers[index] = {
-          ...existing,
-          name: input.provider.name?.trim() ?? existing.name,
-          type: input.provider.type?.trim() ?? existing.type,
-          secret_ref: input.provider.secret_ref !== undefined ? input.provider.secret_ref?.trim() : existing.secret_ref,
-          base_url: input.provider.base_url !== undefined ? input.provider.base_url?.trim() : existing.base_url,
-          default_model: input.provider.default_model !== undefined ? input.provider.default_model?.trim() : existing.default_model,
-          endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
-          aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
-          runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
-          claude_cli_path: input.provider.claude_cli_path !== undefined ? input.provider.claude_cli_path?.trim() : existing.claude_cli_path,
-          models: input.provider.models !== undefined ? input.provider.models : existing.models,
-          max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
-          temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,
-        };
-        config.providers = providers;
-        saveProjectConfig(config, path);
-        return providers[index];
-      }
+      const config = loadGlobalConfig();
+      const providers = config.providers ?? [];
+      const index = providers.findIndex((p) => p.id === input.id);
+      if (index === -1) throw new Error('Provider not found');
+      const existing = providers[index];
+      providers[index] = {
+        ...existing,
+        name: input.provider.name?.trim() ?? existing.name,
+        type: input.provider.type?.trim() ?? existing.type,
+        secret_ref: input.provider.secret_ref !== undefined ? input.provider.secret_ref?.trim() : existing.secret_ref,
+        base_url: input.provider.base_url !== undefined ? input.provider.base_url?.trim() : existing.base_url,
+        default_model: input.provider.default_model !== undefined ? input.provider.default_model?.trim() : existing.default_model,
+        endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
+        aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
+        runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
+        claude_cli_path: input.provider.claude_cli_path !== undefined ? input.provider.claude_cli_path?.trim() : existing.claude_cli_path,
+        models: input.provider.models !== undefined ? input.provider.models : existing.models,
+        max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
+        temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,
+      };
+      config.providers = providers;
+      saveGlobalConfig(config);
+      return providers[index];
     }),
 
   remove: publicProcedure
@@ -218,21 +144,11 @@ export const providerConfigRouter = router({
       })
     )
     .mutation(({ input }) => {
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = (config.providers ?? []).filter((p) => p.id !== input.id);
-        if (providers.length === (config.providers ?? []).length) throw new Error('Provider not found');
-        config.providers = providers;
-        saveGlobalConfig(config);
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = (config.providers ?? []).filter((p) => p.id !== input.id);
-        if (providers.length === (config.providers ?? []).length) throw new Error('Provider not found');
-        config.providers = providers;
-        saveProjectConfig(config, path);
-      }
+      const config = loadGlobalConfig();
+      const providers = (config.providers ?? []).filter((p) => p.id !== input.id);
+      if (providers.length === (config.providers ?? []).length) throw new Error('Provider not found');
+      config.providers = providers;
+      saveGlobalConfig(config);
       log.debug('remove provider', input.id, input.scope);
       return { id: input.id };
     }),
@@ -260,25 +176,13 @@ export const providerConfigRouter = router({
         providers[idx] = { ...p, models };
         return providers[idx];
       };
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = config.providers ?? [];
-        const updated = apply(providers);
-        if (!updated) throw new Error('Provider not found');
-        config.providers = providers;
-        saveGlobalConfig(config);
-        return newModel;
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = config.providers ?? [];
-        const updated = apply(providers);
-        if (!updated) throw new Error('Provider not found');
-        config.providers = providers;
-        saveProjectConfig(config, path);
-        return newModel;
-      }
+      const config = loadGlobalConfig();
+      const providers = config.providers ?? [];
+      const updated = apply(providers);
+      if (!updated) throw new Error('Provider not found');
+      config.providers = providers;
+      saveGlobalConfig(config);
+      return newModel;
     }),
 
   updateModel: publicProcedure
@@ -307,25 +211,13 @@ export const providerConfigRouter = router({
         providers[pIdx] = { ...p, models };
         return updated;
       };
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = config.providers ?? [];
-        const updated = apply(providers);
-        if (!updated) throw new Error('Provider or model not found');
-        config.providers = providers;
-        saveGlobalConfig(config);
-        return updated;
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = config.providers ?? [];
-        const updated = apply(providers);
-        if (!updated) throw new Error('Provider or model not found');
-        config.providers = providers;
-        saveProjectConfig(config, path);
-        return updated;
-      }
+      const config = loadGlobalConfig();
+      const providers = config.providers ?? [];
+      const updated = apply(providers);
+      if (!updated) throw new Error('Provider or model not found');
+      config.providers = providers;
+      saveGlobalConfig(config);
+      return updated;
     }),
 
   /** Fetch available models from the provider API (OpenAI, Anthropic, Bedrock). Returns list to merge or replace in provider. */
@@ -364,21 +256,11 @@ export const providerConfigRouter = router({
         providers[pIdx] = { ...p, models };
         return true;
       };
-      if (input.scope.type === 'global') {
-        const config = loadGlobalConfig();
-        const providers = config.providers ?? [];
-        if (!apply(providers)) throw new Error('Provider or model not found');
-        config.providers = providers;
-        saveGlobalConfig(config);
-      } else {
-        const path = getProjectPathById(input.scope.projectId);
-        if (!path) throw new Error('Project not found or has no local path');
-        const config = loadProjectOnlyConfig(path);
-        const providers = config.providers ?? [];
-        if (!apply(providers)) throw new Error('Provider or model not found');
-        config.providers = providers;
-        saveProjectConfig(config, path);
-      }
+      const config = loadGlobalConfig();
+      const providers = config.providers ?? [];
+      if (!apply(providers)) throw new Error('Provider or model not found');
+      config.providers = providers;
+      saveGlobalConfig(config);
       return { modelId: input.modelId };
     }),
 });

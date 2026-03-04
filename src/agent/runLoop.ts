@@ -23,6 +23,7 @@ import { executeTool } from './tools/executor';
 import './tools/runners';
 import { getToolsForMode } from './toolDefinitions';
 import { getMode } from './modes';
+import { getModeInstructions } from '../shared/config';
 import { createLogger } from '../shared/logger';
 import { analyzeConversationPattern } from './supervisor';
 
@@ -83,6 +84,8 @@ export interface RunAgentLoopInput {
   model?: string;
   progressStore: RunProgressStore;
   signal?: AbortSignal;
+  /** When set (e.g. PR page chat), appended to system prompt so the agent has PR context. */
+  prContextText?: string;
 }
 
 /**
@@ -101,6 +104,7 @@ export async function runAgentLoop(
     model,
     progressStore,
     signal,
+    prContextText,
   } = input;
   const modeId = modeIdOpt ?? 'implementation';
 
@@ -120,6 +124,11 @@ export async function runAgentLoop(
       mode?.systemPrompt ?? getMode('implementation')!.systemPrompt;
     const combinedRules = getCombinedRules(projectRoot);
     if (combinedRules) systemPrompt = systemPrompt + '\n\n' + combinedRules;
+    const extendedInstructions = getModeInstructions(modeId);
+    if (extendedInstructions) systemPrompt = systemPrompt + '\n\n' + extendedInstructions;
+    if (prContextText) {
+      systemPrompt = systemPrompt + '\n\n## Pull request context (for reference)\n\n' + prContextText;
+    }
     const tools = getToolsForMode(modeId);
     log.debug(
       'runLoop',

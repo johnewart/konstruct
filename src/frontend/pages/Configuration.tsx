@@ -20,9 +20,11 @@ import { RunPodPage } from './RunPod';
 import { VMsPage } from './VMs';
 import { ProjectsPage } from './Projects';
 import { LLMProvidersPage } from './LLMProviders';
+import { GitHubConfigPage } from './GitHubConfig';
+import { AssistantInstructionsPage } from './AssistantInstructionsPage';
 
 const TAB_KEY = 'tab';
-const TABS = ['runpod', 'vms', 'projects', 'providers'] as const;
+const TABS = ['runpod', 'vms', 'projects', 'providers', 'assistants', 'github'] as const;
 type TabValue = (typeof TABS)[number];
 
 function isValidTab(v: string): v is TabValue {
@@ -55,6 +57,8 @@ export function ConfigurationPage() {
           <Tabs.Tab value="vms">VMs</Tabs.Tab>
           <Tabs.Tab value="projects">Projects</Tabs.Tab>
           <Tabs.Tab value="providers">Providers</Tabs.Tab>
+          <Tabs.Tab value="assistants">Assistants</Tabs.Tab>
+          <Tabs.Tab value="github">GitHub</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="runpod" pt="md">
           <RunPodPage />
@@ -67,6 +71,12 @@ export function ConfigurationPage() {
         </Tabs.Panel>
         <Tabs.Panel value="providers" pt="md">
           <LLMProvidersPage />
+        </Tabs.Panel>
+        <Tabs.Panel value="assistants" pt="md">
+          <AssistantInstructionsPage />
+        </Tabs.Panel>
+        <Tabs.Panel value="github" pt="md">
+          <GitHubConfigPage />
         </Tabs.Panel>
       </Tabs>
     </Stack>

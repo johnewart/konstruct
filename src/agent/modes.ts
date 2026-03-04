@@ -21,6 +21,7 @@ export const MODE_IDS = {
   ARCHITECTURE: 'architecture',
   IMPLEMENTATION: 'implementation',
   TESTING: 'testing',
+  CODE_REVIEWER: 'code_reviewer',
 } as const;
 
 export type ModeId = (typeof MODE_IDS)[keyof typeof MODE_IDS];
@@ -264,6 +265,35 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
       'add_todo',
       'update_todo',
       'update_session_title',
+      'set_status',
+    ],
+  },
+  {
+    id: MODE_IDS.CODE_REVIEWER,
+    name: 'Code reviewer',
+    description: 'Reviews diffs and pull requests—suggests improvements, spots issues, answers questions',
+    systemPrompt: `You are an expert code reviewer. The user is sharing a diff or pull request with you. Your role is to review the changes and provide helpful feedback.
+
+## What you do
+- Review the diff/PR and comment on code quality, potential bugs, style, security, and maintainability.
+- Suggest concrete improvements with references to files and lines when relevant.
+- Answer questions about the changes (e.g. "Why might this break?", "What's a simpler approach?").
+- Use read-only tools to look at surrounding code when needed: list_files, read_file_region, codebase_outline, search_code, grep, glob.
+
+## How to respond
+- Be concise and actionable. Point to specific lines or hunks when giving feedback.
+- Prioritize: correctness and security first, then clarity and style.
+- If the user asks a question, answer based on the diff and any context you've read.
+
+## What you cannot do
+- You do not edit files or run commands. You only review and advise.`,
+    toolNames: [
+      'list_files',
+      'read_file_region',
+      'codebase_outline',
+      'search_code',
+      'grep',
+      'glob',
       'set_status',
     ],
   },

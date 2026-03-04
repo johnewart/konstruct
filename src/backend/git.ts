@@ -97,6 +97,46 @@ export function isGitRepository(path: string): boolean {
 }
 
 /**
+ * Get the URL of the "origin" remote, or null if not set or not a repo.
+ */
+export function getRemoteOriginUrl(repoPath: string): string | null {
+  const root = getGitRepoPath(repoPath);
+  if (!root) return null;
+  try {
+    const result = execSync('git remote get-url origin', {
+      cwd: root,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+    });
+    const url = result.trim();
+    return url || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse owner and repo from a GitHub URL.
+ * Supports: https://github.com/owner/repo, https://github.com/owner/repo.git, git@github.com:owner/repo.git
+ * Returns null if the URL is not a GitHub URL.
+ */
+export function parseGitHubRepoFromUrl(url: string): { owner: string; repo: string } | null {
+  if (!url?.trim()) return null;
+  const s = url.trim();
+  // https://github.com/owner/repo or https://github.com/owner/repo.git
+  const httpsMatch = s.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(\.git)?$/i);
+  if (httpsMatch) {
+    return { owner: httpsMatch[1], repo: httpsMatch[2].replace(/\.git$/, '') };
+  }
+  // git@github.com:owner/repo.git or git@github.com:owner/repo
+  const sshMatch = s.match(/^git@github\.com:([^/]+)\/([^/]+?)(\.git)?$/i);
+  if (sshMatch) {
+    return { owner: sshMatch[1], repo: sshMatch[2].replace(/\.git$/, '') };
+  }
+  return null;
+}
+
+/**
  * Get the status of all changed files in the repository
  */
 export function getChangedFiles(repoPath: string): GitFileChange[] {
@@ -367,6 +407,53 @@ function getLineNumFromHunkHeader(header: string, isTarget: boolean): number {
   }
   // Default fallback
   return 1;
+}
+
+/**
+ * Parse a unified diff patch string (e.g. from GitHub API) into hunks with line numbers.
+ */
+export function parsePatchToHunks(patch: string): GitDiffHunk[] {
+  const hunks: GitDiffHunk[] = [];
+  const lines = patch.split('\n');
+  let currentHunk: GitDiffHunk | null = null;
+  let nextTargetLine = 1;
+  let nextSourceLine = 1;
+
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      currentHunk = { header: line, lines: [] };
+      hunks.push(currentHunk);
+      nextTargetLine = getLineNumFromHunkHeader(line, true);
+      nextSourceLine = getLineNumFromHunkHeader(line, false);
+    } else if (currentHunk) {
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        currentHunk.lines.push({
+          type: 'add',
+          content: line.substring(1),
+          lineNumber: nextTargetLine,
+        });
+        nextTargetLine++;
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        currentHunk.lines.push({
+          type: 'remove',
+          content: line.substring(1),
+          lineNumber: nextTargetLine,
+          oldLineNumber: nextSourceLine,
+        });
+        nextSourceLine++;
+      } else if (line.startsWith(' ')) {
+        currentHunk.lines.push({
+          type: 'context',
+          content: line.substring(1),
+          lineNumber: nextTargetLine,
+          oldLineNumber: nextSourceLine,
+        });
+        nextTargetLine++;
+        nextSourceLine++;
+      }
+    }
+  }
+  return hunks;
 }
 
 /**

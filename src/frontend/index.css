@@ -1846,6 +1846,15 @@ body {
   padding: 8px 0;
 }
 
+/* Review assistant panel (PR / diff chat): slightly larger font */
+.review-assistant-chat {
+  font-size: 1.05rem;
+}
+.review-assistant-chat .chat-message__content,
+.review-assistant-chat .chat-message__content p {
+  font-size: 1em;
+}
+
 .chat-message__content p {
   margin: 0.25em 0;
 }

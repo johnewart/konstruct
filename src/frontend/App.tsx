@@ -39,6 +39,7 @@ import { ConfigurationPage } from './pages/Configuration';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
 import { DiffViewerPage } from './pages/DiffViewer';
+import { PullRequestsPage } from './pages/PullRequestsPage';
 import './index.css';
 
 function ThemeToggle() {
@@ -70,6 +71,11 @@ function TopNavProjectSelector() {
       void utils.projects.getActive.invalidate();
       void utils.sessions.list.invalidate();
       void utils.chat.listProviders.invalidate();
+      void utils.git.getGitDiff.invalidate();
+      void utils.git.getChangedFiles.invalidate();
+      void utils.review.getOrCreateSession.invalidate();
+      void utils.github.getRepo.invalidate();
+      void utils.github.listPullRequests.invalidate();
       navigate('/');
     },
   });
@@ -111,6 +117,7 @@ function TopNav() {
     location.pathname === '/providers';
   const isCli = location.pathname === '/cli';
   const isDiff = location.pathname === '/diff';
+  const isPr = location.pathname === '/pr';
 
   return (
     <Group
@@ -168,6 +175,17 @@ function TopNav() {
         >
           Diff
         </Link>
+        <Link
+          to="/pr"
+          style={{
+            fontWeight: isPr ? 600 : 400,
+            color: 'var(--app-text)',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          Pull requests
+        </Link>
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
@@ -200,6 +218,7 @@ function App() {
           <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
           <Route path="/cli" element={<FallbackCli />} />
           <Route path="/diff" element={<DiffViewerPage />} />
+          <Route path="/pr" element={<PullRequestsPage />} />
         </Routes>
       </Box>
     </BrowserRouter>

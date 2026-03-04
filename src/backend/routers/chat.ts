@@ -21,6 +21,7 @@ import { router, publicProcedure } from '../trpc/trpc';
 import * as sessionStore from '../../shared/sessionStore';
 import * as runProgressStore from '../../agent/runProgressStore';
 import { getAllModes, getMode } from '../../agent/modes';
+import { getAllModeInstructions, getModeInstructions, setModeInstructions } from '../../shared/config';
 import { getAllProviders } from '../../shared/providers';
 import { getCombinedRules, runAgentLoop } from '../../agent/runLoop';
 import * as agentStream from '../agentStream';
@@ -86,6 +87,14 @@ export function titleCase(str: string): string {
 
 export const chatRouter = router({
   listModes: publicProcedure.query(() => getAllModes()),
+
+  getModeInstructions: publicProcedure.query(() => getAllModeInstructions()),
+
+  setModeInstructions: publicProcedure
+    .input(z.object({ modeId: z.string(), instructions: z.string() }))
+    .mutation(({ input }) => {
+      setModeInstructions(input.modeId, input.instructions);
+    }),
 
   listProviders: publicProcedure.query(({ ctx }) =>
     getAllProviders(ctx.projectRoot)
@@ -244,6 +253,8 @@ export const chatRouter = router({
         mode?.systemPrompt ?? getMode('implementation')!.systemPrompt;
       const combinedRules = getCombinedRules(ctx.projectRoot);
       if (combinedRules) systemPrompt = systemPrompt + '\n\n' + combinedRules;
+      const extendedInstructions = getModeInstructions(modeId);
+      if (extendedInstructions) systemPrompt = systemPrompt + '\n\n' + extendedInstructions;
       const messages = session.messages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -286,9 +297,21 @@ export const chatRouter = router({
         modeId: z.string().optional(),
         providerId: z.string().optional(),
         model: z.string().optional(),
+        /** When set, PR title/body/diff are fetched and added to agent context (for PR page chat). */
+        prContext: z.object({ pullNumber: z.number().int().positive() }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      let prContextText: string | undefined;
+      if (input.prContext) {
+        const { getPRContextForAgent } = await import('./github');
+        try {
+          prContextText = await getPRContextForAgent(ctx.projectRoot, input.prContext.pullNumber);
+        } catch (_) {
+          prContextText = '';
+        }
+      }
+
       if (AGENT_WORKER_URL) {
         const res = await fetch(`${AGENT_WORKER_URL.replace(/\/$/, '')}/run`, {
           method: 'POST',
@@ -300,6 +323,7 @@ export const chatRouter = router({
             providerId: input.providerId,
             model: input.model,
             projectRoot: ctx.projectRoot,
+            ...(prContextText ? { prContextText } : {}),
           }),
         });
         if (!res.ok) {
@@ -320,6 +344,7 @@ export const chatRouter = router({
         providerId: input.providerId,
         model: input.model,
         progressStore: runProgressStore,
+        ...(prContextText ? { prContextText } : {}),
       });
       // Notify WebSocket subscribers so the UI refetches session (same as worker path)
       agentStream.broadcastToSession(

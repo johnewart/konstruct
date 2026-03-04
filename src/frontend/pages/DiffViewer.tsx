@@ -53,6 +53,8 @@ export function DiffViewerPage() {
       createReviewChatSession.mutate({ title: 'Code review' });
   }, [diffFiles?.length, reviewChatSessionId]);
 
+  const hasChanges = !!diffFiles && diffFiles.length > 0;
+
   if (isLoading) {
     return (
       <Box style={{ textAlign: 'center', padding: '40px' }}>
@@ -70,7 +72,7 @@ export function DiffViewerPage() {
     );
   }
 
-  if (!diffFiles || diffFiles.length === 0) {
+  if (!hasChanges) {
     return (
       <Box style={{ textAlign: 'center', padding: '40px' }}>
         <Title order={3}>No changes detected</Title>
@@ -119,7 +121,7 @@ export function DiffViewerPage() {
             <Button
               onClick={() => startReviewMutation.mutate()}
               loading={startReviewMutation.isPending}
-              disabled={!diffFiles?.length}
+              disabled={!hasChanges}
             >
               Start new review
             </Button>
