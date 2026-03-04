@@ -51,7 +51,6 @@ const providerInputSchema = z.object({
   endpoint: z.string().optional(),
   aws_profile: z.string().optional(),
   runpod_pod_id: z.string().optional(),
-  claude_cli_path: z.string().optional(),
   claude_sdk_path: z.string().optional(),
   models: z.array(providerModelSchema).optional(),
   max_tokens: z.number().optional(),
@@ -76,13 +75,33 @@ export const providerConfigRouter = router({
     .mutation(({ input }) => {
       const config = loadGlobalConfig();
       const existing = config.providers ?? [];
-      const isClaudeCli = input.provider.type.trim().toLowerCase() === 'claude_cli';
       const isClaudeSdk = input.provider.type.trim().toLowerCase() === 'claude_sdk';
-      const id = isClaudeCli && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_cli')
-        ? 'claude_cli'
-        : isClaudeSdk && !existing.some((p) => (p.id ?? '').toLowerCase() === 'claude_sdk')
-          ? 'claude_sdk'
-          : randomUUID();
+      const existingClaudeSdkIdx = isClaudeSdk ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === 'claude_sdk') : -1;
+      if (isClaudeSdk && existingClaudeSdkIdx >= 0) {
+        const id = 'claude_sdk';
+        const updated: ConfigProvider = {
+          ...existing[existingClaudeSdkIdx],
+          id,
+          name: input.provider.name.trim(),
+          type: input.provider.type.trim(),
+          secret_ref: input.provider.secret_ref?.trim(),
+          base_url: input.provider.base_url?.trim(),
+          default_model: input.provider.default_model?.trim(),
+          endpoint: input.provider.endpoint?.trim(),
+          aws_profile: input.provider.aws_profile?.trim(),
+          runpod_pod_id: input.provider.runpod_pod_id?.trim(),
+          claude_sdk_path: input.provider.claude_sdk_path?.trim(),
+          models: input.provider.models,
+          max_tokens: input.provider.max_tokens,
+          temperature: input.provider.temperature,
+        };
+        existing[existingClaudeSdkIdx] = updated;
+        config.providers = existing;
+        saveGlobalConfig(config);
+        log.debug('add provider (upsert claude_sdk)', id, input.scope);
+        return updated;
+      }
+      const id = isClaudeSdk ? 'claude_sdk' : randomUUID();
       const provider: ConfigProvider = {
         id,
         name: input.provider.name.trim(),
@@ -93,7 +112,6 @@ export const providerConfigRouter = router({
         endpoint: input.provider.endpoint?.trim(),
         aws_profile: input.provider.aws_profile?.trim(),
         runpod_pod_id: input.provider.runpod_pod_id?.trim(),
-        claude_cli_path: input.provider.claude_cli_path?.trim(),
         claude_sdk_path: input.provider.claude_sdk_path?.trim(),
         models: input.provider.models,
         max_tokens: input.provider.max_tokens,
@@ -120,8 +138,12 @@ export const providerConfigRouter = router({
       const index = providers.findIndex((p) => p.id === input.id);
       if (index === -1) throw new Error('Provider not found');
       const existing = providers[index];
+      const nextType = (input.provider.type?.trim() ?? existing.type ?? '').toLowerCase();
+      const stableId =
+        nextType === 'claude_sdk' ? 'claude_sdk' : existing.id;
       providers[index] = {
         ...existing,
+        id: stableId,
         name: input.provider.name?.trim() ?? existing.name,
         type: input.provider.type?.trim() ?? existing.type,
         secret_ref: input.provider.secret_ref !== undefined ? input.provider.secret_ref?.trim() : existing.secret_ref,
@@ -130,7 +152,6 @@ export const providerConfigRouter = router({
         endpoint: input.provider.endpoint !== undefined ? input.provider.endpoint?.trim() : existing.endpoint,
         aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
         runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
-        claude_cli_path: input.provider.claude_cli_path !== undefined ? input.provider.claude_cli_path?.trim() : existing.claude_cli_path,
         claude_sdk_path: input.provider.claude_sdk_path !== undefined ? input.provider.claude_sdk_path?.trim() : existing.claude_sdk_path,
         models: input.provider.models !== undefined ? input.provider.models : existing.models,
         max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,

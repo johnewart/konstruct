@@ -1476,6 +1476,38 @@ body {
   flex: 1;
 }
 
+/* Streaming thinking/commentary: no box, no scroll, typewriter reveals below */
+.chat-thinking-stream {
+  animation: chat-stream-fade-in 0.35s ease-out forwards;
+  margin-top: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--app-text-muted-2);
+}
+
+.chat-thinking-stream:not(.markdown-body) {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-thinking-stream.markdown-body {
+  white-space: normal;
+}
+
+@keyframes chat-stream-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* New streaming status/tool entries fade in */
+.chat-tool-status--streaming {
+  animation: chat-stream-fade-in 0.25s ease-out forwards;
+}
+
 @keyframes chat-spin {
   to {
     transform: rotate(360deg);

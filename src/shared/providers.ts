@@ -28,14 +28,13 @@ export type ProviderOption = {
   name: string;
 };
 
-/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama, claude_cli, claude_sdk. */
+/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama, claude_sdk. */
 export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'openai', name: 'OpenAI / Vast' },
   { id: 'ollama', name: 'Ollama (local)' },
   { id: 'runpod', name: 'RunPod' },
   { id: 'anthropic', name: 'Anthropic' },
   { id: 'bedrock', name: 'AWS Bedrock' },
-  { id: 'claude_cli', name: 'Claude CLI (agent)' },
   { id: 'claude_sdk', name: 'Claude Code (SDK)' },
 ];
 
@@ -107,22 +106,6 @@ export function getBedrockEnv(
     'anthropic.claude-3-5-sonnet-v2:0';
   const aws_profile = provider?.aws_profile?.trim();
   return { region, model, ...(aws_profile ? { aws_profile } : {}) };
-}
-
-const DEFAULT_CLAUDE_CLI_PATH =
-  (typeof process !== 'undefined' && process.env?.CLAUDE_CLI_PATH) ||
-  (typeof process !== 'undefined' && process.env?.NVM_BIN ? `${process.env.NVM_BIN}/claude` : null) ||
-  'claude';
-
-/** Claude CLI: path from provider config or env (CLAUDE_CLI_PATH / NVM_BIN/claude) or "claude". */
-export function getClaudeCliPath(projectRoot: string, providerId?: string): string {
-  const c = loadConfig(projectRoot);
-  const id = (providerId ?? c.llm?.provider ?? 'claude_cli').toLowerCase();
-  const provider = getProviderById(c, id);
-  const path = provider?.claude_cli_path?.trim();
-  if (path) return path;
-  if (id === 'claude_cli') return DEFAULT_CLAUDE_CLI_PATH;
-  return DEFAULT_CLAUDE_CLI_PATH;
 }
 
 /** Claude SDK: path to Claude Code executable from provider config, or undefined to use SDK default. */
@@ -287,9 +270,6 @@ export function getAllProviders(projectRoot: string): {
     } else if (type === 'ollama') {
       configured = !!(p.base_url?.trim());
       url = p.base_url ?? undefined;
-    } else if (type === 'claude_cli') {
-      const path = (p as { claude_cli_path?: string }).claude_cli_path?.trim();
-      configured = !!path || !!getEnv('CLAUDE_CLI_PATH');
     } else if (type === 'claude_sdk') {
       // Claude SDK supports keyless auth (e.g. claude auth); no secret or path required
       configured = true;

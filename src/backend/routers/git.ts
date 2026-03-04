@@ -20,11 +20,12 @@ import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff } from '../git';
 import type { GitDiffFile } from '../git';
-import { getGlobalConfigDir } from '../../shared/config';
+import { getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import * as sessionStore from '../../shared/sessionStore';
 import { getCachedDependencyGraph } from './codebase';
 import { chat } from '../../shared/llm';
 import { getAllProviders } from '../../shared/providers';
+import * as runProgressStore from '../../agent/runProgressStore';
 
 /** Confidence dimension: score 0–100 with explanation and evidence from the diff. */
 export interface ConfidenceDimension {
@@ -50,6 +51,38 @@ export interface DiffOverviewResult {
 }
 
 const DIFF_OVERVIEW_CACHE_FILE = 'diff-overview.json';
+
+/** Find the end of the top-level JSON object starting at start (the index of '{'). */
+function findJsonObjectEnd(raw: string, start: number): number {
+  let depth = 0;
+  let inString: '"' | "'" | null = null;
+  let escape = false;
+  for (let i = start; i < raw.length; i++) {
+    const c = raw[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (inString) {
+      if (c === inString) inString = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inString = c;
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
 const diffOverviewCache = new Map<string, DiffOverviewResult>();
 const diffOverviewBuilding = new Set<string>();
 
@@ -219,55 +252,83 @@ export const gitRouter = router({
    * Get overview of local diff (title, summary, key files, action items).
    * Runs once when there is no cached result; afterwards only when user triggers via invalidate + refetch.
    * Unparseable cache is treated as cache miss (re-run).
+   * Optional input.providerId and input.model use the project-scoped selection when provided by the frontend.
    */
-  getDiffOverview: publicProcedure.query(
-    async ({ ctx }): Promise<{ building: boolean; overview?: DiffOverviewResult; error?: string }> => {
-      const key = diffOverviewKey(ctx.projectRoot);
-      const cached = diffOverviewCache.get(key);
-      if (cached) return { building: false, overview: cached };
-
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
-      const fileCached = readDiffOverviewFromCache(projectId);
-      if (fileCached) {
-        diffOverviewCache.set(key, fileCached);
-        return { building: false, overview: fileCached };
-      }
-
-      const diffFiles = getGitDiff(ctx.projectRoot);
-      if (diffFiles.length === 0) return { building: false, error: 'No local changes.' };
-
-      if (diffOverviewBuilding.has(key)) return { building: true };
-
-      const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
-      const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
-      const inboundMap = graph ? inboundDepsForDiffFiles(diffFileList, graph.edges) : new Map<string, string[]>();
-      const inboundSection = diffFileList
-        .map((f) => {
-          const deps = inboundMap.get(f.path) ?? [];
-          return `${f.path} (${f.status}): ${deps.length} inbound — ${deps.slice(0, 20).join(', ')}${deps.length > 20 ? ' …' : ''}`;
+  getDiffOverview: publicProcedure
+    .input(
+      z
+        .object({
+          providerId: z.string().optional(),
+          model: z.string().optional(),
         })
-        .join('\n');
+        .optional()
+    )
+    .query(
+      async ({
+        ctx,
+        input,
+      }): Promise<{ building: boolean; overview?: DiffOverviewResult; error?: string; progressId?: string }> => {
+        const key = diffOverviewKey(ctx.projectRoot);
+        const cached = diffOverviewCache.get(key);
+        if (cached) return { building: false, overview: cached };
 
-      const contextText = buildDiffContextText(diffFiles);
+        const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+        const fileCached = readDiffOverviewFromCache(projectId);
+        if (fileCached) {
+          diffOverviewCache.set(key, fileCached);
+          return { building: false, overview: fileCached };
+        }
 
-      diffOverviewBuilding.add(key);
-      setImmediate(async () => {
-        try {
-          const { defaultProviderId, providers } = getAllProviders(ctx.projectRoot);
-          const providerId = defaultProviderId || providers[0]?.id;
-          if (!providerId) {
-            diffOverviewBuilding.delete(key);
-            diffOverviewCache.set(key, {
-              title: 'Overview unavailable',
-              summary: 'No LLM provider configured.',
-              review: '',
-              confidence: DEFAULT_CONFIDENCE,
-              keyFiles: [],
-              actionItems: [],
-            });
-            return;
-          }
-          const systemPrompt = `You are a diff overview and code review assistant. Analyze the local (working tree) changes and respond with a JSON object only (no markdown, no code fence). Keys:
+        const diffFiles = getGitDiff(ctx.projectRoot);
+        if (diffFiles.length === 0) return { building: false, error: 'No local changes.' };
+
+        const progressId = `diff-overview:${projectId}`;
+        if (diffOverviewBuilding.has(key)) return { building: true, progressId };
+
+        const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
+        const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
+        const inboundMap = graph ? inboundDepsForDiffFiles(diffFileList, graph.edges) : new Map<string, string[]>();
+        const inboundSection = diffFileList
+          .map((f) => {
+            const deps = inboundMap.get(f.path) ?? [];
+            return `${f.path} (${f.status}): ${deps.length} inbound — ${deps.slice(0, 20).join(', ')}${deps.length > 20 ? ' …' : ''}`;
+          })
+          .join('\n');
+
+        const contextText = buildDiffContextText(diffFiles);
+
+        const storedProjectModel = projectId ? getProjectModel(projectId) : undefined;
+        const providerIdInput = input?.providerId ?? storedProjectModel?.providerId;
+        const modelInput = input?.model ?? storedProjectModel?.modelId;
+
+        diffOverviewBuilding.add(key);
+        setImmediate(async () => {
+          runProgressStore.setRunning(progressId, true);
+          runProgressStore.pushProgress(progressId, {
+            type: 'status',
+            description: 'Analyzing your changes…',
+            pending: true,
+          });
+          try {
+            const { defaultProviderId, providers } = getAllProviders(ctx.projectRoot);
+            const providerId = providerIdInput ?? defaultProviderId ?? providers[0]?.id;
+            if (!providerId) {
+              runProgressStore.clearProgress(progressId);
+              runProgressStore.setRunning(progressId, false);
+              diffOverviewBuilding.delete(key);
+              diffOverviewCache.set(key, {
+                title: 'Overview unavailable',
+                summary: 'No LLM provider configured.',
+                review: '',
+                confidence: DEFAULT_CONFIDENCE,
+                keyFiles: [],
+                actionItems: [],
+              });
+              return;
+            }
+          const systemPrompt = `You are a diff overview and code review assistant.
+
+Provide a running commentary as you analyze. The user sees this commentary in real time under an "Analyzing" spinner, so emit many short updates as you go—for example: which files or sections you're looking at first, what you're considering next (risk areas, patterns, tests), key observations, and so on. Write in plain language. The more frequent and concrete your updates, the better; the user is waiting and wants to see progress. After your commentary, output the final result as a single JSON object only (no markdown, no code fence). The JSON must have these keys:
 - "title" (short code-based title)
 - "summary" (1–2 sentence code-based summary of changes)
 - "review" (a detailed analytical code review: 2–4 paragraphs covering what changed, design/architecture impact, potential risks, and notable patterns or improvements; use clear paragraphs and be specific about files and behavior)
@@ -279,17 +340,50 @@ export const gitRouter = router({
 - "actionItems" (array of { "text", "level": "high"|"medium"|"low", "files": string[] })
 
 Provide the analytical "review", the "confidence" breakdown with evidence for each dimension, and the structured keyFiles/actionItems.`;
-          const userContent = `## Local diff\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nRespond with a single JSON object.`;
+          const userContent = `## Local diff\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nEmit a running commentary as you analyze (many short updates: what you're looking at, considering, noticing). Then output the single JSON object with the required keys.`;
           const res = await chat(
             [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
             ],
-            { providerId, projectRoot: ctx.projectRoot }
+            {
+              providerId,
+              model: modelInput,
+              projectRoot: ctx.projectRoot,
+              sessionId: progressId,
+              progressStore: runProgressStore,
+            }
           );
           const raw = (res.content ?? '').trim();
-          const jsonMatch = raw.match(/\{[\s\S]*\}/);
-          const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+          let parsed: Record<string, unknown> | null = null;
+          const re = /\{\s*["']title["']\s*:/g;
+          let lastStart = -1;
+          let m: RegExpExecArray | null = null;
+          while ((m = re.exec(raw)) !== null) lastStart = m.index;
+          if (lastStart >= 0) {
+            const end = findJsonObjectEnd(raw, lastStart);
+            const jsonSlice = end >= 0 ? raw.slice(lastStart, end) : raw.slice(lastStart);
+            try {
+              const obj = JSON.parse(jsonSlice) as Record<string, unknown>;
+              if (obj && typeof obj === 'object' && 'title' in obj) parsed = obj;
+            } catch {
+              // parse failed (e.g. truncated or trailing content); fall through to scan
+            }
+          }
+          if (parsed === null) {
+            for (let i = 0; i < raw.length; i++) {
+              if (raw[i] === '{') {
+                const end = findJsonObjectEnd(raw, i);
+                const jsonSlice = end >= 0 ? raw.slice(i, end) : raw.slice(i);
+                try {
+                  const obj = JSON.parse(jsonSlice) as Record<string, unknown>;
+                  if (obj && typeof obj === 'object' && 'title' in obj) parsed = obj;
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
           const overview: DiffOverviewResult = parsed
             ? {
                 title: String(parsed.title ?? ''),
@@ -326,10 +420,12 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
             actionItems: [],
           });
         } finally {
+          runProgressStore.clearProgress(progressId);
+          runProgressStore.setRunning(progressId, false);
           diffOverviewBuilding.delete(key);
         }
       });
-      return { building: true };
+      return { building: true, progressId };
     }
   ),
 
@@ -339,6 +435,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
     diffOverviewCache.delete(key);
     diffOverviewBuilding.delete(key);
     const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    runProgressStore.clearProgress(`diff-overview:${projectId}`);
     deleteDiffOverviewCache(projectId);
     return { ok: true };
   }),

@@ -30,9 +30,12 @@ import {
   Box,
   Group,
   Select,
+  Menu,
+  Button,
 } from '@mantine/core';
 import { useMantineColorScheme, useComputedColorScheme } from '@mantine/core';
 import { IconSun, IconMoon, IconTerminal, IconSettings } from '@tabler/icons-react';
+import { ProjectModelProvider, useProjectModel } from './contexts/ProjectModelContext';
 import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
 import { ConfigurationPage } from './pages/Configuration';
@@ -115,6 +118,115 @@ function TopNavProjectSelector() {
         },
       }}
     />
+  );
+}
+
+function TopNavModelSelector() {
+  const { projectId, providerId, modelId, setProjectModel, isProjectScope } = useProjectModel();
+  const { data: providersData } = trpc.chat.listProviders.useQuery(undefined, {
+    enabled: isProjectScope,
+  });
+  const { data: defaultPodData } = trpc.runpod.getDefaultRunpodPod.useQuery(undefined, {
+    enabled: isProjectScope && providerId === 'runpod',
+  });
+  const { data: runpodModelsData } = trpc.runpod.getRunpodModels.useQuery(
+    { podId: defaultPodData?.defaultPodId ?? '' },
+    { enabled: isProjectScope && providerId === 'runpod' && !!defaultPodData?.defaultPodId }
+  );
+
+  const providers = providersData?.providers ?? [];
+  const defaultProviderId = providersData?.defaultProviderId ?? '';
+  const runpodModels = runpodModelsData?.models ?? [];
+  const configuredProviders = useMemo(
+    () => providers.filter((p) => (p as { configured?: boolean }).configured === true),
+    [providers]
+  );
+
+  const allModelOptions = useMemo(() => {
+    const list: { providerId: string; providerName: string; modelId: string; modelName: string }[] = [];
+    for (const p of configuredProviders) {
+      const prov = p as { defaultModel?: string; models?: { id: string; name: string }[] };
+      const isRunpod = p.id === 'runpod';
+      const models =
+        isRunpod && runpodModels.length > 0
+          ? runpodModels.map((m) => ({ id: m.id, name: m.name ?? m.id }))
+          : prov.models?.length
+            ? prov.models
+            : prov.defaultModel
+              ? [{ id: prov.defaultModel, name: prov.defaultModel }]
+              : [];
+      const providerType = (p as { type?: string }).type ?? '';
+      const isClaudeCliOrSdk = providerType === 'claude_sdk';
+      const modelList =
+        models.length > 0
+          ? models
+          : isClaudeCliOrSdk
+            ? [{ id: 'default', name: 'Default' }]
+            : [{ id: p.id, name: p.name }];
+      for (const m of modelList) {
+        list.push({
+          providerId: p.id,
+          providerName: p.name,
+          modelId: m.id,
+          modelName: m.name || m.id,
+        });
+      }
+    }
+    return list;
+  }, [configuredProviders, runpodModels]);
+
+  const currentLabel =
+    providerId && allModelOptions.length > 0
+      ? (() => {
+          const opt = allModelOptions.find((o) => o.providerId === providerId && o.modelId === modelId);
+          return opt ? `${opt.providerName}: ${opt.modelName}` : (modelId ?? providerId ?? '—');
+        })()
+      : defaultProviderId && configuredProviders.some((p) => p.id === defaultProviderId)
+        ? 'Set model…'
+        : 'Set model…';
+
+  if (!isProjectScope || !projectId) return null;
+
+  return (
+    <Menu position="bottom-end" width={260} shadow="md">
+      <Menu.Target>
+        <Tooltip label="Project model (used by all agents in this project)">
+          <Button
+            size="xs"
+            variant="subtle"
+            compact
+            style={{
+              minWidth: 0,
+              maxWidth: 200,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              fontSize: '0.8rem',
+            }}
+          >
+            {currentLabel}
+          </Button>
+        </Tooltip>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Provider / Model (project-wide)</Menu.Label>
+        {allModelOptions.length === 0 ? (
+          <Menu.Item disabled>No models available</Menu.Item>
+        ) : (
+          allModelOptions.map((opt) => {
+            const isSelected = providerId === opt.providerId && modelId === opt.modelId;
+            return (
+              <Menu.Item
+                key={`${opt.providerId}:${opt.modelId}`}
+                onClick={() => setProjectModel(opt.providerId, opt.modelId)}
+                style={{ fontWeight: isSelected ? 600 : undefined }}
+              >
+                {opt.providerName}: {opt.modelName}
+              </Menu.Item>
+            );
+          })
+        )}
+      </Menu.Dropdown>
+    </Menu>
   );
 }
 
@@ -212,6 +324,7 @@ function TopNav() {
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
+        <TopNavModelSelector />
         <ThemeToggle />
         <Tooltip label="Configuration">
           <ActionIcon
@@ -243,6 +356,7 @@ function TopNav() {
 function App() {
   return (
     <BrowserRouter>
+      <ProjectModelProvider>
       <Box
         component="div"
         style={{
@@ -280,6 +394,7 @@ function App() {
           </Routes>
         </Box>
       </Box>
+      </ProjectModelProvider>
     </BrowserRouter>
   );
 }

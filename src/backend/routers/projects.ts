@@ -23,6 +23,7 @@ import {
   getActiveProjectId,
   setActiveProjectId,
   getActiveProjectRoot,
+  setProjectModelInConfig,
 } from '../../shared/config';
 import type { KonstructProject } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
@@ -133,5 +134,20 @@ export const projectsRouter = router({
       setActiveProjectId(input.projectId);
       log.debug('setActive', input.projectId);
       return { projectId: getActiveProjectId() };
+    }),
+
+  /** Persist project-scoped provider/model so backend can use it when client does not send them. */
+  setProjectModel: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        providerId: z.string().min(1),
+        modelId: z.string().min(1),
+      })
+    )
+    .mutation(({ input }) => {
+      setProjectModelInConfig(input.projectId, input.providerId, input.modelId);
+      log.debug('setProjectModel', input.projectId);
+      return { ok: true };
     }),
 });

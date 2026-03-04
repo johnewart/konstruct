@@ -97,12 +97,23 @@ export function FallbackCli() {
 
   const createSession = trpc.sessions.create.useMutation();
 
+  const { data: activeProject } = trpc.projects.getActive.useQuery();
+  const projectId = activeProject?.id ?? null;
   const getSession = trpc.sessions.get.useQuery(
     { id: sessionId! },
     { enabled: !!sessionId }
   );
   const sendMessage = trpc.chat.sendMessage.useMutation();
   const utils = trpc.useUtils();
+
+  const projectProviderId =
+    projectId && typeof localStorage !== 'undefined'
+      ? localStorage.getItem(`konstruct-project-${projectId}-provider`)
+      : null;
+  const projectModelId =
+    projectId && typeof localStorage !== 'undefined'
+      ? localStorage.getItem(`konstruct-project-${projectId}-model`)
+      : null;
 
   useEffect(() => {
     outputEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -219,6 +230,8 @@ export function FallbackCli() {
         sessionId,
         content: line,
         modeId: 'implementation',
+        ...(projectProviderId ? { providerId: projectProviderId } : {}),
+        ...(projectModelId ? { model: projectModelId } : {}),
       },
       {
         onSuccess: () => {
@@ -247,6 +260,8 @@ export function FallbackCli() {
     createSession,
     setSessionId,
     setSessionTitle,
+    projectProviderId,
+    projectModelId,
   ]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -259,7 +274,8 @@ export function FallbackCli() {
   return (
     <Box
       style={{
-        minHeight: '100vh',
+        height: '100%',
+        minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--mantine-color-default)',

@@ -15,11 +15,10 @@
  */
 
 import { loadConfig, getProviderById, resolveProviderSecret } from './config';
-import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeCliPath, getClaudeSdkPath } from './providers';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeSdkPath } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
-import { runAgent } from '../agent/claude-cli-agent';
-import { runSdkQuery } from '../agent/claude-sdk-agent';
+import { runSdkQuery, type McpProgressStore } from '../agent/claude-sdk-agent';
 import * as fs from 'node:fs';
 import { createLogger } from './logger';
 
@@ -44,6 +43,52 @@ export type ToolDefinition = {
     parameters: Record<string, unknown>;
   };
 };
+
+const DEBUG_LLM_TRUNCATE = 1000;
+
+function isDebugLlm(): boolean {
+  const v = process.env.DEBUG_LLM;
+  return v === '1' || v === 'true' || v === 'full';
+}
+
+function isDebugLlmFull(): boolean {
+  return process.env.DEBUG_LLM === 'full';
+}
+
+function debugLlmTruncate(s: string | undefined): string {
+  if (s == null) return '';
+  if (isDebugLlmFull()) return s;
+  if (s.length <= DEBUG_LLM_TRUNCATE) return s;
+  return s.slice(0, DEBUG_LLM_TRUNCATE) + '\n... [truncated ' + (s.length - DEBUG_LLM_TRUNCATE) + ' chars]';
+}
+
+let _debugLlmLoggedOnce = false;
+function debugLlmLogRequest(messages: ChatMessage[], opts: { providerId: string; model?: string; projectRoot?: string; sessionId?: string }): void {
+  if (!isDebugLlm()) return;
+  if (!_debugLlmLoggedOnce) {
+    _debugLlmLoggedOnce = true;
+    console.log('[DEBUG_LLM] enabled (DEBUG_LLM=' + process.env.DEBUG_LLM + ')');
+  }
+  console.log('[DEBUG_LLM] request', opts);
+  messages.forEach((m, i) => {
+    console.log(`[DEBUG_LLM] message ${i} role=${m.role}`, {
+      contentLength: m.content?.length,
+      content: debugLlmTruncate(m.content),
+      toolCalls: m.toolCalls?.length ? m.toolCalls : undefined,
+      toolCallId: m.toolCallId,
+    });
+  });
+}
+
+function debugLlmLogResponse(res: { content?: string; toolCalls?: unknown; toolCallHistory?: unknown }): void {
+  if (!isDebugLlm()) return;
+  console.log('[DEBUG_LLM] response', {
+    contentLength: res.content?.length,
+    content: debugLlmTruncate(res.content),
+    toolCalls: res.toolCalls,
+    toolCallHistory: res.toolCallHistory,
+  });
+}
 
 function getUrl(baseURL: string, segment: string): string {
   const base = baseURL.replace(/\/$/, '');
@@ -73,6 +118,8 @@ export async function chat(
     projectRoot?: string;
     signal?: AbortSignal;
     sessionId?: string;
+    /** When set with sessionId, MCP tool use (claude_sdk) is pushed here for the UI. */
+    progressStore?: McpProgressStore;
   }
 ): Promise<{
   content: string;
@@ -81,6 +128,8 @@ export async function chat(
     type: string;
     function: { name: string; arguments: string };
   }>;
+  /** When set (e.g. claude_sdk MCP), persist as assistant + tool messages for the work log. */
+  toolCallHistory?: Array<{ id: string; name: string; arguments: string; result: string }>;
 }> {
   const providerId = options?.providerId ?? 'openai';
   const projectRoot = options?.projectRoot ?? '';
@@ -93,8 +142,14 @@ export async function chat(
     log.warn('Could not load config for provider lookup', e);
   }
   const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
-  const isClaudeCli = (provider?.type?.toLowerCase() === 'claude_cli') || (providerId === 'claude_cli');
   const isClaudeSdk = (provider?.type?.toLowerCase() === 'claude_sdk') || (providerId === 'claude_sdk');
+
+  debugLlmLogRequest(messages, {
+    providerId,
+    model: options?.model,
+    projectRoot: projectRoot || undefined,
+    sessionId: options?.sessionId,
+  });
 
   if (isClaudeSdk) {
     const prompt = messages
@@ -118,45 +173,37 @@ export async function chat(
     const requestedModel = options?.model ?? defaultModel;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedModel ?? '');
     const model = !requestedModel || requestedModel === 'default' || isUuid ? undefined : requestedModel;
-    const reply = await runSdkQuery(prompt, {
-      cwd: projectRoot || undefined,
+    const cwd = projectRoot || undefined;
+    const mcpBaseUrl =
+      (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost:3001';
+    const mcpServers: Record<string, { type: 'sse'; url: string }> =
+      cwd
+        ? {
+            konstruct: {
+              type: 'sse',
+              url: `${mcpBaseUrl.replace(/\/$/, '')}/mcp?projectRoot=${encodeURIComponent(cwd)}&mode=implementation${options?.sessionId ? `&konstructSessionId=${encodeURIComponent(options.sessionId)}` : ''}`,
+            },
+          }
+        : {};
+    const { result, toolCallHistory } = await runSdkQuery(prompt, {
+      cwd,
       model,
       env,
       signal: options?.signal,
       pathToClaudeCodeExecutable: sdkPath,
       timeoutMs: 300_000,
+      mcpServers: Object.keys(mcpServers).length ? mcpServers : undefined,
+      bypassPermissions: Object.keys(mcpServers).length > 0,
+      sessionId: options?.sessionId,
+      progressStore: options?.progressStore,
     });
-    return { content: reply, toolCalls: undefined };
-  }
-
-  if (isClaudeCli) {
-    const claudePath = getClaudeCliPath(projectRoot, providerId);
-    const apiKey =
-      (await resolveProviderSecret(projectRoot, providerId)) ??
-      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
-      '';
-    const prompt = messages
-      .map((m) => {
-        if (m.role === 'system') return `[System]\n${m.content}`;
-        if (m.role === 'user') return `[User]\n${m.content}`;
-        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-
-    // --print and --mcp-config appear to be mutually exclusive in the CLI; do not pass MCP when using --print.
-    const reply = await runAgent(prompt, {
-      claudePath,
-      cwd: projectRoot || undefined,
-      timeoutMs: 300_000,
-      env: apiKey ? { ANTHROPIC_API_KEY: apiKey } : undefined,
-    });
-    return { content: reply, toolCalls: undefined };
+    const sdkRes = { content: result, toolCalls: undefined, toolCallHistory };
+    debugLlmLogResponse(sdkRes);
+    return sdkRes;
   }
 
   if (providerId === 'anthropic') {
-    return anthropic.chat(messages, {
+    const anthropicRes = await anthropic.chat(messages, {
       model: options?.model,
       tools: options?.tools,
       projectRoot,
@@ -164,9 +211,11 @@ export async function chat(
       signal: options?.signal,
       sessionId: options?.sessionId,
     });
+    debugLlmLogResponse(anthropicRes);
+    return anthropicRes;
   }
   if (isBedrock) {
-    return bedrock.chat(messages, {
+    const bedrockRes = await bedrock.chat(messages, {
       model: options?.model,
       tools: options?.tools,
       projectRoot,
@@ -174,6 +223,8 @@ export async function chat(
       signal: options?.signal,
       sessionId: options?.sessionId,
     });
+    debugLlmLogResponse(bedrockRes);
+    return bedrockRes;
   }
 
   const isOllama = providerId === 'ollama';
@@ -313,7 +364,7 @@ export async function chat(
     tcCount ? msg.tool_calls!.map((tc) => tc.function.name).join(', ') : ''
   );
 
-  return {
+  const openaiRes = {
     content: msg.content ?? '',
     toolCalls: msg.tool_calls?.map((tc) => ({
       id: tc.id,
@@ -321,4 +372,6 @@ export async function chat(
       function: tc.function,
     })),
   };
+  debugLlmLogResponse(openaiRes);
+  return openaiRes;
 }

@@ -19,6 +19,7 @@ import { Badge, Box, Loader, List, Stack, Text, Title, Button, Group, Alert, Tab
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
+import { useProjectModel } from '../contexts/ProjectModelContext';
 import { DiffViewer } from '../components/DiffViewer';
 import { ReviewAssistantPanel } from '../components/ReviewAssistantPanel';
 
@@ -51,16 +52,50 @@ const CARD_STYLE: React.CSSProperties = {
   overflow: 'hidden',
 };
 
+/** Stop displaying thinking content at the start of the expected JSON (e.g. diff overview). */
+function thinkingTextBeforeJson(raw: string): { text: string; jsonStarted: boolean } {
+  const patterns = [
+    /\n\s*\{\s*["']title["']\s*:/,   // newline then { "title" or 'title'
+    /\{\s*["']title["']\s*:/,        // { "title" anywhere (no newline)
+    /\n\s*"\s*title\s*"\s*:/,        // " title " with spaces
+    /\n```(?:json)?\s*\n/,           // newline then ```json or ``` (code fence)
+    /```(?:json)?\s*\n/,             // ``` at start of line
+  ];
+  for (const re of patterns) {
+    const idx = raw.search(re);
+    if (idx >= 0) {
+      return { text: raw.slice(0, idx).trimEnd(), jsonStarted: true };
+    }
+  }
+  return { text: raw, jsonStarted: false };
+}
+
+const STREAMING_CHARS_PER_TICK = 2;
+const STREAMING_TICK_MS = 28;
+
 export function DiffViewerPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
+  const [frozenThinkingText, setFrozenThinkingText] = useState<string | null>(null);
+  const [visibleThinkingLength, setVisibleThinkingLength] = useState(0);
+  const { providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
 
   const { data: diffFiles, isLoading, error } = trpc.git.getGitDiff.useQuery();
   const utils = trpc.useUtils();
-  const { data: overviewData, refetch: refetchOverview } = trpc.git.getDiffOverview.useQuery(undefined, {
-    enabled: !!diffFiles && diffFiles.length > 0,
-    refetchInterval: (q) => (q.state.data?.building ? 1200 : false),
-  });
+  const { data: overviewData, refetch: refetchOverview } = trpc.git.getDiffOverview.useQuery(
+    { providerId: projectProviderId ?? undefined, model: projectModelId ?? undefined },
+    {
+      enabled: !!diffFiles && diffFiles.length > 0,
+      refetchInterval: (q) => (q.state.data?.building ? 1200 : false),
+    }
+  );
+  const { data: diffOverviewProgress } = trpc.chat.getRunProgress.useQuery(
+    { sessionId: overviewData?.progressId ?? '' },
+    {
+      enabled: !!overviewData?.building && !!overviewData?.progressId,
+      refetchInterval: 600,
+    }
+  );
   const invalidateOverview = trpc.git.invalidateDiffOverview.useMutation({
     onSuccess: () => {
       utils.git.getDiffOverview.invalidate();
@@ -89,6 +124,39 @@ export function DiffViewerPage() {
     if (diffFiles?.length && !reviewChatSessionId)
       createReviewChatSession.mutate({ title: 'Code review', ephemeral: true });
   }, [diffFiles?.length, reviewChatSessionId]);
+
+  useEffect(() => {
+    if (!overviewData?.building) setFrozenThinkingText(null);
+    setVisibleThinkingLength(0);
+  }, [overviewData?.building]);
+
+  const thinkingEntry = diffOverviewProgress?.entries?.find(
+    (e) => e.type === 'tool' && e.toolName === 'Thinking'
+  );
+  const rawThinking = thinkingEntry?.resultSummary || thinkingEntry?.description || '';
+  const thinkingBeforeJson = rawThinking ? thinkingTextBeforeJson(rawThinking) : null;
+
+  useEffect(() => {
+    if (!overviewData?.building || !thinkingBeforeJson?.jsonStarted) return;
+    setFrozenThinkingText((prev) => (prev !== null ? prev : thinkingBeforeJson.text));
+    setVisibleThinkingLength((prev) => Math.max(prev, thinkingBeforeJson.text.length));
+  }, [overviewData?.building, thinkingBeforeJson?.text, thinkingBeforeJson?.jsonStarted]);
+
+  const displayThinking =
+    frozenThinkingText ??
+    (thinkingBeforeJson ? thinkingBeforeJson.text : null);
+
+  useEffect(() => {
+    if (!displayThinking || !overviewData?.building) return;
+    const targetLength = displayThinking.length;
+    const id = setInterval(() => {
+      setVisibleThinkingLength((prev) => {
+        if (prev >= targetLength) return prev;
+        return Math.min(prev + STREAMING_CHARS_PER_TICK, targetLength);
+      });
+    }, STREAMING_TICK_MS);
+    return () => clearInterval(id);
+  }, [overviewData?.building, displayThinking]);
 
   const hasChanges = !!diffFiles && diffFiles.length > 0;
 
@@ -138,15 +206,48 @@ export function DiffViewerPage() {
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
+          overflow: overviewData?.building ? 'auto' : undefined,
         }}
       >
-        <Tabs defaultValue="summary" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Tabs
+          defaultValue="summary"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: overviewData?.building ? 'visible' : 'hidden',
+          }}
+        >
           <Tabs.List style={{ flexShrink: 0 }}>
             <Tabs.Tab value="summary">Summary</Tabs.Tab>
             <Tabs.Tab value="changes">Changes / Review</Tabs.Tab>
           </Tabs.List>
-          <Tabs.Panel value="summary" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <Group justify="space-between" align="center" wrap="wrap" gap="sm" style={{ padding: '8px 16px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+          <Tabs.Panel
+            value="summary"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'visible',
+            }}
+          >
+            <Group
+              justify="space-between"
+              align="center"
+              wrap="wrap"
+              gap="sm"
+              style={{
+                padding: '8px 16px',
+                borderBottom: '1px solid var(--app-border)',
+                flexShrink: 0,
+                position: 'sticky',
+                top: 0,
+                backgroundColor: 'var(--app-surface)',
+                zIndex: 1,
+              }}
+            >
               <Title order={5} style={{ margin: 0 }}>Summary</Title>
               <Button
                 variant="light"
@@ -158,12 +259,30 @@ export function DiffViewerPage() {
                 {overviewData?.building ? 'Analyzing…' : 'Regenerate summary'}
               </Button>
             </Group>
-            {overviewData?.building ? (
-              <Box py="xl" style={{ textAlign: 'center' }}>
-                <Loader size="sm" />
-                <Text size="md" c="dimmed" mt="xs">Analyzing your changes…</Text>
-              </Box>
-            ) : overviewData?.error ? (
+            <Box
+              style={
+                overviewData?.building
+                  ? { flex: 'none', overflow: 'visible' }
+                  : { flex: 1, minHeight: 0, overflow: 'auto' }
+              }
+            >
+              {overviewData?.building ? (
+                <Box p="md" style={{ overflow: 'visible' }}>
+                  <Group gap="sm" align="center" wrap="nowrap" style={{ marginBottom: displayThinking ? 12 : 0 }}>
+                    <Loader size="sm" />
+                    <Text size="md" c="dimmed">
+                      {frozenThinkingText ? 'Preparing summary…' : 'Analyzing your changes…'}
+                    </Text>
+                  </Group>
+                  {diffOverviewProgress?.entries && diffOverviewProgress.entries.length > 0 && displayThinking ? (
+                    <div className="chat-thinking-stream markdown-body" role="status" style={{ fontSize: '1rem', lineHeight: 1.6, overflow: 'visible' }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {displayThinking.slice(0, visibleThinkingLength)}
+                      </ReactMarkdown>
+                    </div>
+                  ) : null}
+                </Box>
+              ) : overviewData?.error ? (
               <Box p="md">
                 <Alert color="orange" title="Summary unavailable">{overviewData.error}</Alert>
                 {reviewChatSession?.suggestedImprovements?.length ? (
@@ -283,6 +402,7 @@ export function DiffViewerPage() {
                 </Stack>
               </Box>
             ) : null}
+            </Box>
           </Tabs.Panel>
           <Tabs.Panel value="changes" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Group

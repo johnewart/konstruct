@@ -21,7 +21,7 @@ import { router, publicProcedure } from '../trpc/trpc';
 import * as sessionStore from '../../shared/sessionStore';
 import * as runProgressStore from '../../agent/runProgressStore';
 import { getAllModes, getMode } from '../../agent/modes';
-import { getAllModeInstructions, getModeInstructions, setModeInstructions } from '../../shared/config';
+import { getAllModeInstructions, getModeInstructions, setModeInstructions, getProjectModel } from '../../shared/config';
 import { getAllProviders } from '../../shared/providers';
 import { getCombinedRules, runAgentLoop } from '../../agent/runLoop';
 import * as agentStream from '../agentStream';
@@ -313,6 +313,11 @@ export const chatRouter = router({
         }
       }
 
+      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const storedProjectModel = projectId ? getProjectModel(projectId) : undefined;
+      const effectiveProviderId = input.providerId ?? storedProjectModel?.providerId;
+      const effectiveModelId = input.model ?? storedProjectModel?.modelId;
+
       if (AGENT_WORKER_URL) {
         const res = await fetch(`${AGENT_WORKER_URL.replace(/\/$/, '')}/run`, {
           method: 'POST',
@@ -321,8 +326,8 @@ export const chatRouter = router({
             sessionId: input.sessionId,
             content: input.content,
             modeId: input.modeId,
-            providerId: input.providerId,
-            model: input.model,
+            providerId: effectiveProviderId,
+            model: effectiveModelId,
             projectRoot: ctx.projectRoot,
             ...(prContextText ? { prContextText } : {}),
           }),
@@ -331,7 +336,6 @@ export const chatRouter = router({
           const err = await res.text();
           throw new Error(`Agent worker unavailable: ${res.status} ${err}`);
         }
-        const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
         const session = sessionStore.getSession(input.sessionId, projectId);
         if (!session) throw new Error('Session not found');
         return session;
@@ -342,8 +346,8 @@ export const chatRouter = router({
         sessionId: input.sessionId,
         content: input.content,
         modeId: input.modeId,
-        providerId: input.providerId,
-        model: input.model,
+        providerId: effectiveProviderId,
+        model: effectiveModelId,
         progressStore: runProgressStore,
         ...(prContextText ? { prContextText } : {}),
       });

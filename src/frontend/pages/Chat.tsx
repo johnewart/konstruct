@@ -23,6 +23,7 @@ const CHAT_MODEL_KEY = 'chat-model-id';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
+import { useProjectModel } from '../contexts/ProjectModelContext';
 import { ChatMessage } from '../components/ChatMessage';
 import {
   Accordion,
@@ -222,6 +223,7 @@ type QueuedMessage = {
 export function Chat() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const { isProjectScope: projectModelScope, providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
   const [input, setInput] = useState('');
   const [todoInput, setTodoInput] = useState('');
   const [modeId, setModeId] = useState('implementation');
@@ -371,6 +373,17 @@ export function Chat() {
     if (typeof window !== 'undefined')
       localStorage.setItem(CHAT_PROVIDER_KEY, next || '');
   }, [providers, configuredProviders, defaultProviderId, providerId]);
+  const effectiveProviderId =
+    projectModelScope && projectProviderId
+      ? projectProviderId
+      : (providerId ?? defaultProviderId);
+  const effectiveModelId =
+    projectModelScope && projectProviderId
+      ? projectModelId
+      : providerId === 'runpod'
+        ? selectedRunpodModelId
+        : selectedModelId;
+
   const allModelOptions = useMemo(() => {
     const list: { providerId: string; providerName: string; modelId: string; modelName: string }[] = [];
     for (const p of configuredProviders) {
@@ -385,9 +398,9 @@ export function Chat() {
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
       if (models.length === 0) {
-        // Claude CLI/SDK use their own model selection; use "default" so we don't pass provider id (e.g. UUID) as model
+        // Claude SDK uses its own model selection; use "default" so we don't pass provider id (e.g. UUID) as model
         const providerType = (p as { type?: string }).type ?? '';
-        const isClaudeCliOrSdk = providerType === 'claude_cli' || providerType === 'claude_sdk';
+        const isClaudeCliOrSdk = providerType === 'claude_sdk';
         models = isClaudeCliOrSdk ? [{ id: 'default', name: 'Default' }] : [{ id: p.id, name: p.name }];
       }
       for (const m of models) {
@@ -739,12 +752,8 @@ export function Chat() {
         sessionId,
         content: buildMessageContent(text),
         modeId,
-        providerId: providerId ?? defaultProviderId,
-        ...(providerId === 'runpod' && selectedRunpodModelId
-          ? { model: selectedRunpodModelId }
-          : selectedModelId
-            ? { model: selectedModelId }
-            : {}),
+        providerId: effectiveProviderId ?? defaultProviderId,
+        ...(effectiveModelId ? { model: effectiveModelId } : {}),
       });
       setInput('');
       setAttachments([]);
@@ -753,9 +762,9 @@ export function Chat() {
       input,
       sessionId,
       modeId,
-      providerId,
-      selectedRunpodModelId,
-      selectedModelId,
+      effectiveProviderId,
+      effectiveModelId,
+      defaultProviderId,
       sendMessage,
       buildMessageContent,
       isRunInProgress,
@@ -874,18 +883,14 @@ export function Chat() {
   }, [messages]);
 
   const maxContextTokens = useMemo(() => {
-    const p = providers.find((x) => x.id === (providerId ?? defaultProviderId));
-    const modelId =
-      providerId === 'runpod'
-        ? selectedRunpodModelId
-        : selectedModelId;
-    const effectiveId = modelId ?? (p as { defaultModel?: string } | undefined)?.defaultModel;
+    const p = providers.find((x) => x.id === (effectiveProviderId ?? defaultProviderId));
+    const effectiveId = effectiveModelId ?? (p as { defaultModel?: string } | undefined)?.defaultModel;
     if (!effectiveId || !p?.models?.length) return DEFAULT_MAX_CONTEXT_TOKENS;
     const model = (p.models as { id: string; name: string; contextWindow?: number }[]).find(
       (m) => m.id === effectiveId || m.name === effectiveId
     );
     return model?.contextWindow && model.contextWindow > 0 ? model.contextWindow : DEFAULT_MAX_CONTEXT_TOKENS;
-  }, [providers, providerId, defaultProviderId, selectedRunpodModelId, selectedModelId]);
+  }, [providers, effectiveProviderId, effectiveModelId, defaultProviderId]);
 
   const contextWithDraft =
     contextTokens + Math.ceil(input.length / CHARS_PER_TOKEN_ESTIMATE);
@@ -909,12 +914,8 @@ export function Chat() {
         sessionId,
         content: buildMessageContent(text),
         modeId,
-        providerId: providerId ?? defaultProviderId,
-        ...(providerId === 'runpod' && selectedRunpodModelId
-          ? { model: selectedRunpodModelId }
-          : selectedModelId
-            ? { model: selectedModelId }
-            : {}),
+        providerId: effectiveProviderId ?? defaultProviderId,
+        ...(effectiveModelId ? { model: effectiveModelId } : {}),
       });
       setInput('');
       setAttachments([]);
@@ -923,9 +924,9 @@ export function Chat() {
       input,
       sessionId,
       modeId,
-      providerId,
-      selectedRunpodModelId,
-      selectedModelId,
+      effectiveProviderId,
+      effectiveModelId,
+      defaultProviderId,
       sendMessage,
       buildMessageContent,
     ]
@@ -1319,8 +1320,8 @@ export function Chat() {
               </span>
               {(() => {
                 const current =
-                  providerId && providers.length
-                    ? providers.find((p) => p.id === providerId)
+                  effectiveProviderId && providers.length
+                    ? providers.find((p) => p.id === effectiveProviderId)
                     : null;
                 const providerUrl =
                   current &&
@@ -1328,7 +1329,7 @@ export function Chat() {
                   typeof (current as { url?: string }).url === 'string'
                     ? (current as { url: string }).url
                     : null;
-                const isRunpod = providerId === 'runpod';
+                const isRunpod = effectiveProviderId === 'runpod';
                 const podDot = isRunpod
                   ? (() => {
                       const accessible =
@@ -1442,7 +1443,7 @@ export function Chat() {
                           {runProgressEntries.map((entry, i) => (
                             <div
                               key={i}
-                              className={`chat-tool-status ${entry.pending ? 'chat-tool-status--pending' : ''}`}
+                              className={`chat-tool-status chat-tool-status--streaming ${entry.pending ? 'chat-tool-status--pending' : ''}`}
                             >
                               <span
                                 className="chat-tool-status__indicator"
@@ -1453,7 +1454,9 @@ export function Chat() {
                               <span className="chat-tool-status__text">
                                 {entry.type === 'status'
                                   ? entry.description
-                                  : (entry.description ?? entry.toolName)}
+                                  : entry.description
+                                    ? `${entry.toolName ?? 'tool'}(${entry.description})`
+                                    : (entry.toolName ?? 'tool')}
                               </span>
                             </div>
                           ))}
@@ -1483,71 +1486,86 @@ export function Chat() {
                       style={{ marginLeft: 'auto' }}
                     >
                       <span className="chat-mode-label">Model:</span>
-                      <Menu position="bottom-end" width={280} shadow="md">
-                        <Menu.Target>
-                          <Tooltip label="Click to change model">
-                            <span
-                              className="chat-mode-name"
-                              style={{
-                                cursor: 'pointer',
-                                textDecoration: 'underline',
-                                textUnderlineOffset: 2,
-                              }}
-                            >
-                              {providerId && providers.length
-                                ? (() => {
-                                    const modelId =
-                                      providerId === 'runpod'
-                                        ? selectedRunpodModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel
-                                        : selectedModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel;
-                                    const opt = allModelOptions.find(
-                                      (o) => o.providerId === providerId && o.modelId === modelId
-                                    );
-                                    return opt ? opt.modelName : (modelId ?? '—');
-                                  })()
-                                : '—'}
-                            </span>
-                          </Tooltip>
-                        </Menu.Target>
-                        <Menu.Dropdown>
-                          <Menu.Label>Provider / Model</Menu.Label>
-                          {allModelOptions.length === 0 ? (
-                            <Menu.Item disabled>No models available</Menu.Item>
-                          ) : (
-                            allModelOptions.map((opt) => {
-                              const isSelected =
-                                providerId === opt.providerId &&
-                                (opt.providerId === 'runpod'
-                                  ? selectedRunpodModelId === opt.modelId
-                                  : selectedModelId === opt.modelId);
-                              return (
-                                <Menu.Item
-                                  key={`${opt.providerId}:${opt.modelId}`}
-                                  onClick={() => {
-                                    setProviderId(opt.providerId);
-                                    if (opt.providerId === 'runpod') {
-                                      setSelectedRunpodModelId(opt.modelId);
+                      {projectModelScope ? (
+                        <Tooltip label="Change model in the top bar (project-wide)">
+                          <span className="chat-mode-name">
+                            {effectiveProviderId && allModelOptions.length > 0
+                              ? (() => {
+                                  const opt = allModelOptions.find(
+                                    (o) => o.providerId === effectiveProviderId && o.modelId === effectiveModelId
+                                  );
+                                  return opt ? `${opt.providerName}: ${opt.modelName}` : (effectiveModelId ?? '—');
+                                })()
+                              : 'Set in top bar'}
+                          </span>
+                        </Tooltip>
+                      ) : (
+                        <Menu position="bottom-end" width={280} shadow="md">
+                          <Menu.Target>
+                            <Tooltip label="Click to change model">
+                              <span
+                                className="chat-mode-name"
+                                style={{
+                                  cursor: 'pointer',
+                                  textDecoration: 'underline',
+                                  textUnderlineOffset: 2,
+                                }}
+                              >
+                                {providerId && providers.length
+                                  ? (() => {
+                                      const modelId =
+                                        providerId === 'runpod'
+                                          ? selectedRunpodModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel
+                                          : selectedModelId ?? (providers.find((p) => p.id === providerId) as { defaultModel?: string } | undefined)?.defaultModel;
+                                      const opt = allModelOptions.find(
+                                        (o) => o.providerId === providerId && o.modelId === modelId
+                                      );
+                                      return opt ? opt.modelName : (modelId ?? '—');
+                                    })()
+                                  : '—'}
+                              </span>
+                            </Tooltip>
+                          </Menu.Target>
+                          <Menu.Dropdown>
+                            <Menu.Label>Provider / Model</Menu.Label>
+                            {allModelOptions.length === 0 ? (
+                              <Menu.Item disabled>No models available</Menu.Item>
+                            ) : (
+                              allModelOptions.map((opt) => {
+                                const isSelected =
+                                  providerId === opt.providerId &&
+                                  (opt.providerId === 'runpod'
+                                    ? selectedRunpodModelId === opt.modelId
+                                    : selectedModelId === opt.modelId);
+                                return (
+                                  <Menu.Item
+                                    key={`${opt.providerId}:${opt.modelId}`}
+                                    onClick={() => {
+                                      setProviderId(opt.providerId);
+                                      if (opt.providerId === 'runpod') {
+                                        setSelectedRunpodModelId(opt.modelId);
+                                        if (typeof window !== 'undefined')
+                                          localStorage.setItem(RUNPOD_CHAT_MODEL_KEY, opt.modelId);
+                                      } else {
+                                        setSelectedModelId(opt.modelId);
+                                        if (typeof window !== 'undefined')
+                                          localStorage.setItem(CHAT_MODEL_KEY, opt.modelId);
+                                      }
                                       if (typeof window !== 'undefined')
-                                        localStorage.setItem(RUNPOD_CHAT_MODEL_KEY, opt.modelId);
-                                    } else {
-                                      setSelectedModelId(opt.modelId);
-                                      if (typeof window !== 'undefined')
-                                        localStorage.setItem(CHAT_MODEL_KEY, opt.modelId);
-                                    }
-                                    if (typeof window !== 'undefined')
-                                      localStorage.setItem(CHAT_PROVIDER_KEY, opt.providerId);
-                                  }}
-                                  style={{
-                                    fontWeight: isSelected ? 600 : undefined,
-                                  }}
-                                >
-                                  {opt.providerName}: {opt.modelName}
-                                </Menu.Item>
-                              );
-                            })
-                          )}
-                        </Menu.Dropdown>
-                      </Menu>
+                                        localStorage.setItem(CHAT_PROVIDER_KEY, opt.providerId);
+                                    }}
+                                    style={{
+                                      fontWeight: isSelected ? 600 : undefined,
+                                    }}
+                                  >
+                                    {opt.providerName}: {opt.modelName}
+                                  </Menu.Item>
+                                );
+                              })
+                            )}
+                          </Menu.Dropdown>
+                        </Menu>
+                      )}
                     </span>
                   </div>
                 )}
@@ -1870,12 +1888,8 @@ export function Chat() {
                                       msg.content
                                     ),
                                     modeId,
-                                    providerId: providerId ?? defaultProviderId,
-                                    ...(providerId === 'runpod' && selectedRunpodModelId
-                                      ? { model: selectedRunpodModelId }
-                                      : selectedModelId
-                                        ? { model: selectedModelId }
-                                        : {}),
+                                    providerId: effectiveProviderId ?? defaultProviderId,
+                                    ...(effectiveModelId ? { model: effectiveModelId } : {}),
                                   });
                                   // Clear attachments after sending
                                   setAttachments([]);

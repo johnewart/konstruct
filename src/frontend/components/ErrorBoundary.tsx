@@ -75,15 +75,41 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       const message = error?.message ?? 'Unknown error';
       const stack = this.state.errorInfo?.componentStack ?? error?.stack ?? null;
       const errorBlock = (
-        <Paper p="md" radius={0} withBorder style={{ borderLeft: 0, borderRight: 0, borderTop: 0, backgroundColor: 'var(--mantine-color-red-0)' }}>
-          <Stack gap="xs">
-            <Group justify="space-between">
+        <Paper
+          p="md"
+          radius={0}
+          withBorder
+          style={{
+            borderLeft: 0,
+            borderRight: 0,
+            borderTop: 0,
+            backgroundColor: 'var(--mantine-color-red-0)',
+            flexShrink: 0,
+            maxHeight: '40vh',
+            minHeight: 80,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <Stack gap="xs" style={{ flex: 1, minHeight: 0 }}>
+            <Group justify="space-between" wrap="nowrap">
               <Text size="sm" fw={600} c="red">Error (copy to report)</Text>
               <Button size="xs" variant="light" leftSection={<IconCopy size={14} />} onClick={this.handleCopyError}>
                 Copy error
               </Button>
             </Group>
-            <Code block style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, maxHeight: 200, overflow: 'auto' }}>
+            <Code
+              block
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: 12,
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+              }}
+            >
               {[message, stack, this.state.errorInfo?.componentStack].filter(Boolean).join('\n\n')}
             </Code>
           </Stack>
@@ -92,9 +118,19 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       if (this.props.fallback) {
         return (
-          <Box style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-default)' }}>
+          <Box
+            style={{
+              height: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--mantine-color-default)',
+              overflow: 'hidden',
+            }}
+          >
             {errorBlock}
-            {this.props.fallback}
+            <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              {this.props.fallback}
+            </Box>
           </Box>
         );
       }

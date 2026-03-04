@@ -34,6 +34,7 @@ import {
 } from '@mantine/core';
 import { IconExternalLink } from '@tabler/icons-react';
 import { trpc } from '../../client/trpc';
+import { useProjectModel } from '../contexts/ProjectModelContext';
 import { DiffViewer } from '../components/DiffViewer';
 import { ReviewAssistantPanel } from '../components/ReviewAssistantPanel';
 import type { GitDiffFile } from '../../shared/types';
@@ -90,6 +91,7 @@ type PRItem = {
 };
 
 export function PullRequestsPage() {
+  const { providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
   const [selectedPr, setSelectedPr] = useState<PRItem | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
@@ -155,7 +157,11 @@ export function PullRequestsPage() {
   );
   const utils = trpc.useUtils();
   const { data: overviewData, refetch: refetchOverview } = trpc.github.getPROverview.useQuery(
-    { pullNumber: selectedPr?.number ?? 0 },
+    {
+      pullNumber: selectedPr?.number ?? 0,
+      providerId: projectProviderId ?? undefined,
+      model: projectModelId ?? undefined,
+    },
     {
       enabled: !!selectedPr?.number,
       refetchInterval: (q) => (q.state.data?.building ? 1200 : false),

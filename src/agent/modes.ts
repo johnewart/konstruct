@@ -257,6 +257,7 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
       'edit_file',
       'write_file',
       'run_command',
+      'getGitDiff',
       'create_plan',
       'create_design',
       'edit_plan',

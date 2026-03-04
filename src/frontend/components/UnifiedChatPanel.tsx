@@ -27,6 +27,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { trpc } from '../../client/trpc';
+import { useProjectModel } from '../contexts/ProjectModelContext';
 import { ChatMessage } from './ChatMessage';
 import type { ChatMsgForWorkLog } from '../lib/chatWorkLog';
 
@@ -77,6 +78,7 @@ export function UnifiedChatPanel({
   transformContent,
   onBeforeSend,
 }: UnifiedChatPanelProps) {
+  const { isProjectScope: projectModelScope, providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
   const [input, setInput] = useState('');
   const [modeId, setModeId] = useState<string>(() => {
     if (typeof window === 'undefined') return defaultModeId;
@@ -167,7 +169,7 @@ export function UnifiedChatPanel({
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
       const providerType = (p as { type?: string }).type ?? '';
-      const isClaudeCliOrSdk = providerType === 'claude_cli' || providerType === 'claude_sdk';
+      const isClaudeCliOrSdk = providerType === 'claude_sdk';
       const modelList =
         models.length > 0
           ? models
@@ -185,6 +187,17 @@ export function UnifiedChatPanel({
     }
     return list;
   }, [configuredProviders, runpodModels]);
+
+  const effectiveProviderId =
+    projectModelScope && projectProviderId
+      ? projectProviderId
+      : (providerId ?? defaultProviderId);
+  const effectiveModelId =
+    projectModelScope && projectProviderId
+      ? projectModelId
+      : providerId === 'runpod'
+        ? selectedRunpodModelId
+        : selectedModelId;
 
   useEffect(() => {
     if (!providerId && defaultProviderId && configuredProviders.some((p) => p.id === defaultProviderId)) {
@@ -310,18 +323,14 @@ export function UnifiedChatPanel({
         const toSend = result.content ?? content;
         setPendingUserMessage(toSend);
         setInput('');
-        sendMessage.mutate({
-          sessionId,
-          content: toSend,
-          modeId: modeId || defaultModeId,
-          providerId: (providerId ?? defaultProviderId) || undefined,
-          ...(providerId === 'runpod' && selectedRunpodModelId
-            ? { model: selectedRunpodModelId }
-            : selectedModelId
-              ? { model: selectedModelId }
-              : {}),
-          ...(prContext ? { prContext: { pullNumber: prContext.pullNumber } } : {}),
-        });
+      sendMessage.mutate({
+        sessionId,
+        content: toSend,
+        modeId: modeId || defaultModeId,
+        providerId: (effectiveProviderId ?? defaultProviderId) || undefined,
+        ...(effectiveModelId ? { model: effectiveModelId } : {}),
+        ...(prContext ? { prContext: { pullNumber: prContext.pullNumber } } : {}),
+      });
         return;
       }
 
@@ -330,12 +339,8 @@ export function UnifiedChatPanel({
         sessionId,
         content,
         modeId: modeId || defaultModeId,
-        providerId: (providerId ?? defaultProviderId) || undefined,
-        ...(providerId === 'runpod' && selectedRunpodModelId
-          ? { model: selectedRunpodModelId }
-          : selectedModelId
-            ? { model: selectedModelId }
-            : {}),
+        providerId: (effectiveProviderId ?? defaultProviderId) || undefined,
+        ...(effectiveModelId ? { model: effectiveModelId } : {}),
         ...(prContext ? { prContext: { pullNumber: prContext.pullNumber } } : {}),
       });
       setInput('');
@@ -345,10 +350,9 @@ export function UnifiedChatPanel({
       sessionId,
       modeId,
       defaultModeId,
-      providerId,
+      effectiveProviderId,
+      effectiveModelId,
       defaultProviderId,
-      selectedModelId,
-      selectedRunpodModelId,
       prContext,
       sendMessage,
       transformContent,
@@ -380,14 +384,12 @@ export function UnifiedChatPanel({
   };
 
   const currentModelLabel =
-    providerId && allModelOptions.length > 0
+    effectiveProviderId && allModelOptions.length > 0
       ? (() => {
-          const modelId =
-            providerId === 'runpod'
-              ? selectedRunpodModelId ?? allModelOptions.find((o) => o.providerId === 'runpod')?.modelId
-              : selectedModelId ?? allModelOptions.find((o) => o.providerId === providerId)?.modelId;
-          const opt = allModelOptions.find((o) => o.providerId === providerId && o.modelId === modelId);
-          return opt ? `${opt.providerName}: ${opt.modelName}` : '—';
+          const opt = allModelOptions.find(
+            (o) => o.providerId === effectiveProviderId && o.modelId === effectiveModelId
+          );
+          return opt ? `${opt.providerName}: ${opt.modelName}` : (effectiveModelId ?? '—');
         })()
       : '—';
 
@@ -432,51 +434,59 @@ export function UnifiedChatPanel({
               aria-label="Mode"
             />
           )}
-          <Menu position="bottom-end" width={260} shadow="md">
-            <Menu.Target>
-              <Tooltip label="Model">
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  compact
-                  style={{
-                    minWidth: 0,
-                    maxWidth: 110,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    fontSize: '0.7rem',
-                    padding: '2px 6px',
-                    height: 22,
-                  }}
-                >
-                  {currentModelLabel}
-                </Button>
-              </Tooltip>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Label>Provider / Model</Menu.Label>
-              {allModelOptions.length === 0 ? (
-                <Menu.Item disabled>No models available</Menu.Item>
-              ) : (
-                allModelOptions.map((opt) => {
-                  const isSelected =
-                    providerId === opt.providerId &&
-                    (opt.providerId === 'runpod'
-                      ? selectedRunpodModelId === opt.modelId
-                      : selectedModelId === opt.modelId);
-                  return (
-                    <Menu.Item
-                      key={`${opt.providerId}:${opt.modelId}`}
-                      onClick={() => handleModelSelect({ providerId: opt.providerId, modelId: opt.modelId })}
-                      style={{ fontWeight: isSelected ? 600 : undefined }}
-                    >
-                      {opt.providerName}: {opt.modelName}
-                    </Menu.Item>
-                  );
-                })
-              )}
-            </Menu.Dropdown>
-          </Menu>
+          {projectModelScope ? (
+            <Tooltip label="Project model (change in top bar)">
+              <Text size="xs" c="dimmed" style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {currentModelLabel}
+              </Text>
+            </Tooltip>
+          ) : (
+            <Menu position="bottom-end" width={260} shadow="md">
+              <Menu.Target>
+                <Tooltip label="Model">
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    compact
+                    style={{
+                      minWidth: 0,
+                      maxWidth: 110,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      fontSize: '0.7rem',
+                      padding: '2px 6px',
+                      height: 22,
+                    }}
+                  >
+                    {currentModelLabel}
+                  </Button>
+                </Tooltip>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Label>Provider / Model</Menu.Label>
+                {allModelOptions.length === 0 ? (
+                  <Menu.Item disabled>No models available</Menu.Item>
+                ) : (
+                  allModelOptions.map((opt) => {
+                    const isSelected =
+                      providerId === opt.providerId &&
+                      (opt.providerId === 'runpod'
+                        ? selectedRunpodModelId === opt.modelId
+                        : selectedModelId === opt.modelId);
+                    return (
+                      <Menu.Item
+                        key={`${opt.providerId}:${opt.modelId}`}
+                        onClick={() => handleModelSelect({ providerId: opt.providerId, modelId: opt.modelId })}
+                        style={{ fontWeight: isSelected ? 600 : undefined }}
+                      >
+                        {opt.providerName}: {opt.modelName}
+                      </Menu.Item>
+                    );
+                  })
+                )}
+              </Menu.Dropdown>
+            </Menu>
+          )}
         </Group>
       </Group>
 
@@ -516,7 +526,7 @@ export function UnifiedChatPanel({
                       {statusBoxEntries.map((entry, i) => (
                         <div
                           key={i}
-                          className={`chat-tool-status ${entry.pending ? 'chat-tool-status--pending' : ''}`}
+                          className={`chat-tool-status chat-tool-status--streaming ${entry.pending ? 'chat-tool-status--pending' : ''}`}
                         >
                           <span className="chat-tool-status__indicator" aria-hidden>
                             {entry.pending ? '○' : '●'}
@@ -524,7 +534,9 @@ export function UnifiedChatPanel({
                           <span className="chat-tool-status__text">
                             {entry.type === 'status'
                               ? entry.description
-                              : entry.description ?? entry.toolName}
+                              : entry.description
+                                ? `${entry.toolName ?? 'tool'}(${entry.description})`
+                                : (entry.toolName ?? 'tool')}
                           </span>
                         </div>
                       ))}

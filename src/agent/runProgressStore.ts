@@ -67,3 +67,38 @@ export function updateLastResult(
   last.resultSummary = resultSummary;
   last.pending = false;
 }
+
+/** Update the most recent entry with type 'status' (e.g. streaming thinking). Leaves tool entries unchanged. */
+export function updateLastStatusResult(
+  sessionId: string,
+  resultSummary: string
+): void {
+  const list = progressBySession.get(sessionId);
+  if (!list?.length) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type === 'status') {
+      list[i].resultSummary = resultSummary;
+      return;
+    }
+  }
+}
+
+const STREAMING_THINKING_TOOL_NAME = 'Thinking';
+
+/** Update the most recent entry with toolName 'Thinking' (streaming assistant text). Used so thinking appears like a tool in the UI. */
+export function updateLastThinkingEntry(
+  sessionId: string,
+  description: string,
+  resultSummary: string
+): void {
+  const list = progressBySession.get(sessionId);
+  if (!list?.length) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (e.type === 'tool' && e.toolName === STREAMING_THINKING_TOOL_NAME) {
+      e.description = description;
+      e.resultSummary = resultSummary;
+      return;
+    }
+  }
+}

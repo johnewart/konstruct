@@ -26,7 +26,7 @@
  *
  * Query params on GET /mcp:
  *   projectRoot  - absolute path for tool path resolution (default: cwd)
- *   mode         - Konstruct mode whose toolset to expose (default: ask)
+ *   mode         - Konstruct mode whose toolset to expose (default: implementation = all tools)
  */
 
 import '../agent/tools/runners.ts'; // register all tool implementations
@@ -38,13 +38,12 @@ import { createLogger } from '../shared/logger.ts';
 
 const log = createLogger('mcp');
 
-// Tools that only make sense inside a Konstruct session — omit from MCP.
-const SESSION_TOOLS = new Set(['list_todos', 'add_todo', 'update_todo', 'update_session_title']);
-
 interface McpSession {
   res: http.ServerResponse;
   projectRoot: string;
   modeId: string;
+  /** Konstruct chat session id (optional); when set, session-scoped tools (list_todos, add_todo, etc.) work. */
+  konstructSessionId?: string;
 }
 
 const sessions = new Map<string, McpSession>();
@@ -53,9 +52,14 @@ const sessions = new Map<string, McpSession>();
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Send an SSE event. Multi-line data is sent as multiple "data: " lines per the SSE spec. */
 function sendSseEvent(session: McpSession, event: string, data: string): void {
   try {
-    session.res.write(`event: ${event}\ndata: ${data}\n\n`);
+    session.res.write(`event: ${event}\n`);
+    for (const line of data.split('\n')) {
+      session.res.write(`data: ${line}\n`);
+    }
+    session.res.write('\n');
   } catch {
     // Connection already closed — ignore
   }
@@ -99,9 +103,7 @@ async function dispatchRequest(
       break;
 
     case 'tools/list': {
-      const tools = getToolsForMode(session.modeId)
-        .filter((t) => !SESSION_TOOLS.has(t.function.name))
-        .map(toMcpTool);
+      const tools = getToolsForMode(session.modeId).map(toMcpTool);
       respond({ tools });
       break;
     }
@@ -116,6 +118,7 @@ async function dispatchRequest(
       try {
         const result = await executeTool(p.name, p.arguments ?? {}, {
           projectRoot: session.projectRoot,
+          sessionId: session.konstructSessionId,
         });
         const text = result.error ?? result.result ?? '';
         respond({ content: [{ type: 'text', text }], isError: !!result.error });
@@ -137,17 +140,29 @@ async function dispatchRequest(
 // ---------------------------------------------------------------------------
 
 /**
+ * Build the base URL for this request (scheme + host) so the client can POST to absolute URLs.
+ */
+function getBaseUrl(req: http.IncomingMessage): string {
+  const host = req.headers.host ?? 'localhost:3001';
+  const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() ?? 'http';
+  return `${proto}://${host}`;
+}
+
+/**
  * GET /mcp — open an SSE session.
- * Claude connects here; we send back the messages endpoint URL.
+ * Claude connects here; we send back the messages endpoint as a full URL so the client can POST.
  */
 export function handleMcpSse(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   url: URL
 ): void {
-  const sessionId = crypto.randomUUID();
+  const mcpSessionId = crypto.randomUUID();
   const projectRoot = url.searchParams.get('projectRoot') ?? process.cwd();
-  const modeId = url.searchParams.get('mode') ?? 'ask';
+  const modeId = url.searchParams.get('mode') ?? 'implementation';
+  const konstructSessionId = url.searchParams.get('konstructSessionId') ?? undefined;
+  const baseUrl = getBaseUrl(req);
+  const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${mcpSessionId}`;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -156,11 +171,11 @@ export function handleMcpSse(
     'Access-Control-Allow-Origin': '*',
   });
 
-  const session: McpSession = { res, projectRoot, modeId };
-  sessions.set(sessionId, session);
+  const session: McpSession = { res, projectRoot, modeId, konstructSessionId };
+  sessions.set(mcpSessionId, session);
 
-  // Tell Claude where to POST JSON-RPC messages
-  sendSseEvent(session, 'endpoint', `/mcp/messages?sessionId=${sessionId}`);
+  // Send full URL so Claude (or any MCP client) can POST without knowing the server origin
+  sendSseEvent(session, 'endpoint', messagesUrl);
 
   // Keep-alive pings every 15 s to prevent proxy timeouts
   const ping = setInterval(() => {
@@ -169,11 +184,11 @@ export function handleMcpSse(
 
   req.on('close', () => {
     clearInterval(ping);
-    sessions.delete(sessionId);
-    log.debug('mcp session closed', sessionId);
+    sessions.delete(mcpSessionId);
+    log.debug('mcp session closed', mcpSessionId);
   });
 
-  log.debug('mcp session opened', sessionId, 'project:', projectRoot, 'mode:', modeId);
+  log.debug('mcp session opened', mcpSessionId, 'project:', projectRoot, 'mode:', modeId);
 }
 
 /**

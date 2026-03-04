@@ -174,6 +174,7 @@ export async function runAgentLoop(
         projectRoot,
         signal,
         sessionId,
+        progressStore,
       });
       
       // Fire-and-forget supervisor check every 10-15 turns
@@ -208,6 +209,45 @@ export async function runAgentLoop(
         'toolCalls:',
         response.toolCalls?.length ?? 0
       );
+
+      if (response.toolCallHistory?.length) {
+        messages.push({
+          role: 'assistant',
+          content: ' ',
+          toolCalls: response.toolCallHistory.map((th) => ({
+            id: th.id,
+            type: 'function',
+            function: { name: th.name, arguments: th.arguments },
+          })),
+        });
+        const maxToolResultChars = 28 * 1024;
+        for (const th of response.toolCallHistory) {
+          let resultContent = th.result;
+          if (resultContent.length > maxToolResultChars) {
+            resultContent =
+              resultContent.slice(0, maxToolResultChars) +
+              '\n\n(truncated; output exceeded ' +
+              maxToolResultChars +
+              ' chars)';
+          }
+          messages.push({
+            role: 'tool',
+            content: resultContent,
+            toolCallId: th.id,
+          });
+        }
+        messages.push({
+          role: 'assistant',
+          content: response.content,
+        });
+        sessionStore.updateSessionMessages(
+          sessionId,
+          messages.filter(
+            (m) => m.role !== 'system'
+          ) as sessionStore.ChatMessage[]
+        );
+        break;
+      }
 
       if (response.toolCalls?.length) {
         messages.push({

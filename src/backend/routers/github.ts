@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import { loadGlobalConfig, saveGlobalConfig, getGitHubToken, getGlobalConfigDir } from '../../shared/config';
+import { loadGlobalConfig, saveGlobalConfig, getGitHubToken, getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import { getRemoteOriginUrl, parseGitHubRepoFromUrl, isGitRepository, parsePatchToHunks } from '../git';
 import type { GitDiffFile } from '../git';
 import { getCachedDependencyGraph } from './codebase';
@@ -304,7 +304,13 @@ export const githubRouter = router({
    * First call starts a background summarizer; poll until building is false.
    */
   getPROverview: publicProcedure
-    .input(z.object({ pullNumber: z.number().int().positive() }))
+    .input(
+      z.object({
+        pullNumber: z.number().int().positive(),
+        providerId: z.string().optional(),
+        model: z.string().optional(),
+      })
+    )
     .query(async ({ ctx, input }): Promise<{ building: boolean; overview?: PROverviewResult; error?: string }> => {
       const key = overviewKey(ctx.projectRoot, input.pullNumber);
       const cached = overviewCache.get(key);
@@ -337,10 +343,13 @@ export const githubRouter = router({
       overviewBuilding.add(key);
       const projectIdForBuild = projectId;
       const pullNumberForBuild = input.pullNumber;
+      const storedProjectModel = projectId ? getProjectModel(projectId) : undefined;
+      const providerIdInput = input.providerId ?? storedProjectModel?.providerId;
+      const modelInput = input.model ?? storedProjectModel?.modelId;
       setImmediate(async () => {
         try {
           const { defaultProviderId, providers } = getAllProviders(ctx.projectRoot);
-          const providerId = defaultProviderId || providers[0]?.id;
+          const providerId = providerIdInput ?? defaultProviderId ?? providers[0]?.id;
           if (!providerId) {
             overviewBuilding.delete(key);
             overviewCache.set(key, {
@@ -358,7 +367,7 @@ export const githubRouter = router({
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
             ],
-            { providerId, projectRoot: ctx.projectRoot }
+            { providerId, model: modelInput, projectRoot: ctx.projectRoot }
           );
           const raw = (res.content ?? '').trim();
           const jsonMatch = raw.match(/\{[\s\S]*\}/);
