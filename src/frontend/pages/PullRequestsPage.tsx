@@ -17,8 +17,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Accordion,
   Box,
   Loader,
+  ScrollArea,
   Text,
   Title,
   Alert,
@@ -78,6 +80,60 @@ export function PullRequestsPage() {
 
   const diffFiles: GitDiffFile[] = prDiffData?.error === null ? prDiffData.diffFiles : [];
   const hasDiff = diffFiles.length > 0;
+
+  const { data: depGraph, isLoading: depGraphLoading } = trpc.codebase.getDependencyGraph.useQuery(
+    { path: '.' },
+    {
+      enabled: !!selectedPr && diffFiles.length > 0,
+      refetchInterval: (q) => (q.state.data?.building ? 800 : false),
+    }
+  );
+  const { data: reviewSession } = trpc.sessions.get.useQuery(
+    { id: reviewChatSessionId! },
+    { enabled: !!reviewChatSessionId && !!selectedPr }
+  );
+
+  const prFileSet = new Set(
+    diffFiles.map((f) => f.path.replace(/\\/g, '/').trim())
+  );
+  const relatedFiles: string[] = [];
+  let relatedToActive: string[] = [];
+  if (depGraph?.nodes?.length && depGraph?.edges?.length && !depGraph.building) {
+    const seen = new Set<string>();
+    for (const e of depGraph.edges) {
+      const s = (e.source ?? '').replace(/\\/g, '/').trim();
+      const t = (e.target ?? '').replace(/\\/g, '/').trim();
+      const srcInPr = prFileSet.has(s);
+      const tgtInPr = prFileSet.has(t);
+      if (srcInPr && !prFileSet.has(t) && t) {
+        if (!seen.has(t)) {
+          seen.add(t);
+          relatedFiles.push(t);
+        }
+      }
+      if (tgtInPr && !prFileSet.has(s) && s) {
+        if (!seen.has(s)) {
+          seen.add(s);
+          relatedFiles.push(s);
+        }
+      }
+    }
+    relatedFiles.sort();
+
+    if (activeFile) {
+      const active = activeFile.replace(/\\/g, '/').trim();
+      const toActive = new Set<string>();
+      for (const e of depGraph.edges) {
+        const s = (e.source ?? '').replace(/\\/g, '/').trim();
+        const t = (e.target ?? '').replace(/\\/g, '/').trim();
+        if (s === active && t && !toActive.has(t)) toActive.add(t);
+        if (t === active && s && !toActive.has(s)) toActive.add(s);
+      }
+      relatedToActive = [...toActive].sort();
+    }
+  }
+  const displayRelatedFiles = activeFile ? relatedToActive : relatedFiles;
+  const suggestedFiles = reviewSession?.suggestedFiles ?? [];
 
   if (repoLoading) {
     return (
@@ -228,7 +284,7 @@ export function PullRequestsPage() {
         </Stack>
       </Box>
 
-      {/* Right: diff + chat (when a PR is selected) */}
+      {/* Center: diff + chat (when a PR is selected) */}
       <Box style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
         {!selectedPr ? (
           <Box
@@ -331,6 +387,122 @@ export function PullRequestsPage() {
           </>
         )}
       </Box>
+
+      {/* Right: accordion (Related files + Assistant suggestions) when a PR is selected */}
+      {selectedPr && (
+        <Box
+          style={{
+            ...CARD_STYLE,
+            width: 280,
+            minWidth: 260,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <Box style={{ padding: '12px 16px', borderBottom: '1px solid var(--app-border)' }}>
+            <Title order={5}>Context</Title>
+          </Box>
+          <ScrollArea style={{ flex: 1 }} type="auto">
+            <Accordion
+              variant="separated"
+              defaultValue={['related', 'suggestions']}
+              multiple
+              styles={{
+                content: { padding: '8px 12px' },
+                control: { padding: '10px 12px' },
+                item: { border: 'none', borderBottom: '1px solid var(--app-border)' },
+              }}
+            >
+              <Accordion.Item value="related">
+                <Accordion.Control>Related files</Accordion.Control>
+                <Accordion.Panel>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    Files that use or are used by the code in this PR (from dependency graph).
+                  </Text>
+                  {depGraphLoading && !depGraph ? (
+                    <Group gap="xs">
+                      <Loader size="sm" />
+                      <Text size="sm" c="dimmed">Loading graph…</Text>
+                    </Group>
+                  ) : depGraph?.building ? (
+                    <Stack gap={4}>
+                      <Group gap="xs">
+                        <Loader size="sm" />
+                        <Text size="sm" c="dimmed">
+                          {depGraph.phase === 'discovering'
+                            ? `Discovering files… ${depGraph.filesProcessed ?? 0} found`
+                            : `Building graph… ${depGraph.filesProcessed ?? 0} of ${depGraph.totalFiles ?? 0} files`}
+                        </Text>
+                      </Group>
+                      {depGraph.currentDir && (
+                        <Text size="xs" c="dimmed">In: {depGraph.currentDir}</Text>
+                      )}
+                    </Stack>
+                  ) : depGraph?.error ? (
+                    <Text size="sm" c="red">{depGraph.error}</Text>
+                  ) : displayRelatedFiles.length === 0 ? (
+                    <Text size="sm" c="dimmed">
+                      {activeFile ? `No files in the graph are connected to the selected file.` : 'No related files found.'}
+                    </Text>
+                  ) : (
+                    <Stack gap={4}>
+                      {activeFile && (
+                        <Text size="xs" c="dimmed">
+                          Related to: {activeFile}
+                        </Text>
+                      )}
+                      {displayRelatedFiles.map((p) => (
+                        <Text
+                          key={p}
+                          size="sm"
+                          component="div"
+                          style={{
+                            fontFamily: 'var(--mono-font)',
+                            wordBreak: 'break-all',
+                            cursor: 'default',
+                          }}
+                        >
+                          {p}
+                        </Text>
+                      ))}
+                    </Stack>
+                  )}
+                </Accordion.Panel>
+              </Accordion.Item>
+              <Accordion.Item value="suggestions">
+                <Accordion.Control>Assistant suggestions</Accordion.Control>
+                <Accordion.Panel>
+                  <Text size="xs" c="dimmed" mb="xs">
+                    Files the reviewer assistant thinks are relevant (even if not in the graph).
+                  </Text>
+                  {suggestedFiles.length === 0 ? (
+                    <Text size="sm" c="dimmed">None yet. Ask the assistant to review; it can suggest files.</Text>
+                  ) : (
+                    <Stack gap={4}>
+                      {suggestedFiles.map((p) => (
+                        <Text
+                          key={p}
+                          size="sm"
+                          component="div"
+                          style={{
+                            fontFamily: 'var(--mono-font)',
+                            wordBreak: 'break-all',
+                            cursor: 'default',
+                          }}
+                        >
+                          {p}
+                        </Text>
+                      ))}
+                    </Stack>
+                  )}
+                </Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
+          </ScrollArea>
+        </Box>
+      )}
     </Box>
   );
 }

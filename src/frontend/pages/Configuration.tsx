@@ -15,20 +15,50 @@
  */
 
 import { Link, useSearchParams } from 'react-router-dom';
-import { Tabs, Stack, Group, Text } from '@mantine/core';
+import { Tabs, Stack, Group, Text, Card, Button } from '@mantine/core';
 import { RunPodPage } from './RunPod';
 import { VMsPage } from './VMs';
 import { ProjectsPage } from './Projects';
 import { LLMProvidersPage } from './LLMProviders';
 import { GitHubConfigPage } from './GitHubConfig';
 import { AssistantInstructionsPage } from './AssistantInstructionsPage';
+import { trpc } from '../../client/trpc';
 
 const TAB_KEY = 'tab';
-const TABS = ['runpod', 'vms', 'projects', 'providers', 'assistants', 'github'] as const;
+const TABS = ['runpod', 'vms', 'projects', 'providers', 'assistants', 'github', 'code'] as const;
 type TabValue = (typeof TABS)[number];
 
 function isValidTab(v: string): v is TabValue {
   return TABS.includes(v as TabValue);
+}
+
+function CodeConfigSection() {
+  const clearCaches = trpc.codebase.clearAllDependencyGraphCaches.useMutation();
+  return (
+    <Stack gap="md">
+      <Card withBorder padding="md" radius="md">
+        <Text fw={600} size="sm" mb="xs">
+          Dependency graph cache
+        </Text>
+        <Text size="sm" c="dimmed" mb="md">
+          The dependency graph (Code explorer, PR related files) is cached for about an hour. Clear all caches to force a fresh build on next view.
+        </Text>
+        <Button
+          variant="light"
+          size="sm"
+          loading={clearCaches.isPending}
+          onClick={() => clearCaches.mutate(undefined)}
+        >
+          Clear all dependency graph caches
+        </Button>
+        {clearCaches.isSuccess && (
+          <Text size="sm" c="dimmed" mt="sm">
+            Cleared {clearCaches.data?.cleared ?? 0} cache entries.
+          </Text>
+        )}
+      </Card>
+    </Stack>
+  );
 }
 
 export function ConfigurationPage() {
@@ -59,6 +89,7 @@ export function ConfigurationPage() {
           <Tabs.Tab value="providers">Providers</Tabs.Tab>
           <Tabs.Tab value="assistants">Assistants</Tabs.Tab>
           <Tabs.Tab value="github">GitHub</Tabs.Tab>
+          <Tabs.Tab value="code">Code</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="runpod" pt="md">
           <RunPodPage />
@@ -77,6 +108,9 @@ export function ConfigurationPage() {
         </Tabs.Panel>
         <Tabs.Panel value="github" pt="md">
           <GitHubConfigPage />
+        </Tabs.Panel>
+        <Tabs.Panel value="code" pt="md">
+          <CodeConfigSection />
         </Tabs.Panel>
       </Tabs>
     </Stack>

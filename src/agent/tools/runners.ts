@@ -586,6 +586,17 @@ registerTool('set_status', (args): ToolResult => {
   return { result: JSON.stringify({ ok: true, description: desc }) };
 });
 
+registerTool('suggest_relevant_file', (args, context): ToolResult => {
+  const filePath = str(args.path);
+  if (!filePath?.trim()) return { error: 'missing path argument' };
+  const sessionId = context?.sessionId;
+  const projectRoot = getProjectRoot(context);
+  if (!sessionId) return { error: 'no session — cannot suggest file' };
+  const session = sessionStore.addSuggestedFile(sessionId, projectRoot, filePath.trim());
+  if (!session) return { error: 'session not found' };
+  return { result: `Added "${filePath.trim()}" to assistant suggestions.` };
+});
+
 registerTool('list_todos', (args, context): ToolResult => {
   const sessionId = context?.sessionId;
   if (!sessionId) {

@@ -116,6 +116,10 @@ const STATUS_FNS: Record<string, (args: Record<string, unknown>) => string> = {
     const desc = str(args.description);
     return desc ?? 'Updating status…';
   },
+  suggest_relevant_file: (args) => {
+    const p = str(args.path);
+    return p ? `Suggesting file: ${p}` : 'Suggesting relevant file…';
+  },
   list_todos: () => 'Listing todos…',
   add_todo: (args) => {
     const desc = str(args.description);

@@ -321,6 +321,24 @@ const ALL_TOOL_DEFS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_relevant_file',
+      description:
+        'Add a file path to the review context so the user sees it in the "Assistant suggestions" panel. Use when a file is relevant to the review even if it is not in the dependency graph (e.g. tests, config, or related code you looked at). Path should be relative to the project root.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'File path relative to project root',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_todos',
       description:
         "List the session's todo items (id, description, status: pending|in_progress|completed).",

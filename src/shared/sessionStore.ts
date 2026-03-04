@@ -50,6 +50,8 @@ export interface Session {
   updatedAt: Date;
   messages: ChatMessage[];
   todos: TodoItem[];
+  /** File paths the assistant suggested as relevant to the review (e.g. on PR page). */
+  suggestedFiles?: string[];
 }
 
 /**
@@ -104,10 +106,12 @@ function serialize(s: Session): SessionSerialized {
 }
 
 function deserialize(raw: SessionSerialized): Session {
+  const suggested = (raw as SessionSerialized & { suggestedFiles?: string[] }).suggestedFiles;
   return {
     ...raw,
     createdAt: toValidDate(raw.createdAt),
     updatedAt: toValidDate(raw.updatedAt),
+    suggestedFiles: Array.isArray(suggested) ? suggested : [],
   };
 }
 
@@ -312,6 +316,34 @@ export function listTodos(sessionId: string): TodoItem[] {
   const session = entry?.session;
   if (!session?.todos) return [];
   return session.todos;
+}
+
+/**
+ * Add a file path to the session's suggested-files list (for PR review assistant).
+ * Loads session from disk if not in memory so the worker can update the same session.
+ */
+export function addSuggestedFile(
+  sessionId: string,
+  projectRoot: string,
+  filePath: string
+): Session | undefined {
+  const projectId = resolveProjectId(projectRoot);
+  let entry = sessionById.get(sessionId);
+  if (!entry) {
+    const fromDisk = loadSessionFromDisk(sessionId, projectId);
+    if (!fromDisk) return undefined;
+    entry = { session: fromDisk, projectId };
+    sessionById.set(sessionId, entry);
+  }
+  const session = entry.session;
+  if (!Array.isArray(session.suggestedFiles)) session.suggestedFiles = [];
+  const normalized = filePath.trim().replace(/\\/g, '/');
+  if (normalized && !session.suggestedFiles.includes(normalized)) {
+    session.suggestedFiles.push(normalized);
+    session.updatedAt = new Date();
+    saveSessionToProject(session, entry.projectId);
+  }
+  return session;
 }
 
 export function addTodo(

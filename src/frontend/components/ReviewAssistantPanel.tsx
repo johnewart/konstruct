@@ -51,16 +51,22 @@ export function ReviewAssistantPanel({ sessionId, prContext }: ReviewAssistantPa
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const utils = trpc.useUtils();
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<{ content: string } | null>(null);
+  const prevRunningRef = useRef<boolean>(false);
 
-  const { data: session } = trpc.sessions.get.useQuery(
-    { id: sessionId! },
-    { enabled: !!sessionId }
-  );
   const { data: runProgress } = trpc.chat.getRunProgress.useQuery(
     { sessionId: sessionId! },
     {
       enabled: !!sessionId,
       refetchInterval: (q) => (q.state.data?.running ? 400 : false),
+    }
+  );
+  const isRunning = runProgress?.running === true;
+  const { data: session } = trpc.sessions.get.useQuery(
+    { id: sessionId! },
+    {
+      enabled: !!sessionId,
+      refetchInterval: isRunning ? 2000 : false,
     }
   );
   const { data: modes } = trpc.chat.listModes.useQuery();
@@ -120,13 +126,22 @@ export function ReviewAssistantPanel({ sessionId, prContext }: ReviewAssistantPa
     },
   });
 
+  useEffect(() => {
+    const running = runProgress?.running === true;
+    if (prevRunningRef.current && !running) {
+      utils.sessions.get.invalidate({ id: sessionId! });
+      setOptimisticUserMessage(null);
+    }
+    prevRunningRef.current = running;
+  }, [runProgress?.running, sessionId, utils.sessions.get]);
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [session?.messages?.length, scrollToBottom]);
+  }, [session?.messages?.length, optimisticUserMessage, scrollToBottom]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -147,6 +162,7 @@ export function ReviewAssistantPanel({ sessionId, prContext }: ReviewAssistantPa
         ...(prContext ? { prContext: { pullNumber: prContext.pullNumber } } : {}),
       });
       setInput('');
+      setOptimisticUserMessage({ content: text });
     },
     [
       input,
@@ -183,7 +199,11 @@ export function ReviewAssistantPanel({ sessionId, prContext }: ReviewAssistantPa
 
   const messages = session?.messages ?? [];
   const displayMessages = messages.filter((m) => m.role !== 'system');
-  const chatWindowMessages = displayMessages.filter((msg) => {
+  const withOptimistic =
+    optimisticUserMessage && !displayMessages.some((m) => m.role === 'user' && m.content === optimisticUserMessage.content)
+      ? [...displayMessages, { role: 'user' as const, content: optimisticUserMessage.content }]
+      : displayMessages;
+  const chatWindowMessages = withOptimistic.filter((msg) => {
     if (msg.role === 'tool') return false;
     if (
       msg.role === 'assistant' &&
@@ -194,7 +214,6 @@ export function ReviewAssistantPanel({ sessionId, prContext }: ReviewAssistantPa
     return true;
   });
 
-  const isRunning = runProgress?.running === true;
   const currentModelLabel =
     providerId && allModelOptions.length > 0
       ? (() => {

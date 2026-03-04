@@ -279,6 +279,7 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
 - Suggest concrete improvements with references to files and lines when relevant.
 - Answer questions about the changes (e.g. "Why might this break?", "What's a simpler approach?").
 - Use read-only tools to look at surrounding code when needed: list_files, read_file_region, codebase_outline, search_code, grep, glob.
+- When you find a file that is relevant to the review (e.g. tests, config, or code you referenced) but not necessarily in the diff, call suggest_relevant_file with its path so the user sees it in the Assistant suggestions panel.
 
 ## How to respond
 - Be concise and actionable. Point to specific lines or hunks when giving feedback.
@@ -295,6 +296,7 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
       'grep',
       'glob',
       'set_status',
+      'suggest_relevant_file',
     ],
   },
   {

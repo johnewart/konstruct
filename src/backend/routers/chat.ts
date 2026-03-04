@@ -307,7 +307,8 @@ export const chatRouter = router({
         const { getPRContextForAgent } = await import('./github');
         try {
           prContextText = await getPRContextForAgent(ctx.projectRoot, input.prContext.pullNumber);
-        } catch (_) {
+        } catch (err) {
+          console.warn('[chat] getPRContextForAgent failed for PR', input.prContext.pullNumber, err);
           prContextText = '';
         }
       }

@@ -26,11 +26,14 @@ const CODE_EXPLORER_MAX_FILES = 5000;
 const PARSING_BATCH_SIZE = 25;
 /** Delay (ms) between chunks so the event loop can run and CPU doesn't peg. */
 const CHUNK_YIELD_MS = 8;
+/** Cache TTL: dependency graph entries expire after 1 hour. */
+const CACHE_TTL_MS = 60 * 60 * 1000;
 
 type CachedGraph = {
   nodes: Array<{ path: string }>;
   edges: Array<{ source: string; target: string; type: string }>;
   truncated: boolean;
+  cachedAt: number;
 };
 
 type BuildState =
@@ -99,16 +102,20 @@ export const codebaseRouter = router({
 
       const cached = graphCache.get(key);
       if (cached) {
-        return {
-          error: null,
-          nodes: cached.nodes,
-          edges: cached.edges,
-          truncated: cached.truncated,
-          building: false,
-          filesProcessed: cached.nodes.length,
-          totalFiles: cached.nodes.length,
-          pathStripPrefix,
-        };
+        const age = Date.now() - cached.cachedAt;
+        if (age <= CACHE_TTL_MS) {
+          return {
+            error: null,
+            nodes: cached.nodes,
+            edges: cached.edges,
+            truncated: cached.truncated,
+            building: false,
+            filesProcessed: cached.nodes.length,
+            totalFiles: cached.nodes.length,
+            pathStripPrefix,
+          };
+        }
+        graphCache.delete(key);
       }
 
       const building = buildStateMap.get(key);
@@ -248,7 +255,12 @@ export const codebaseRouter = router({
             target: stripRootFromPath(e.target, rootPrefix),
             type: e.type,
           }));
-          graphCache.set(key, { nodes: strippedNodes, edges: strippedEdges, truncated: false });
+          graphCache.set(key, {
+            nodes: strippedNodes,
+            edges: strippedEdges,
+            truncated: false,
+            cachedAt: Date.now(),
+          });
           buildStateMap.delete(key);
         }
 
@@ -283,4 +295,12 @@ export const codebaseRouter = router({
       buildStateMap.delete(key);
       return { invalidated: true };
     }),
+
+  /** Clear all in-memory dependency graph caches (all paths, all projects). Use from Config to force fresh builds. */
+  clearAllDependencyGraphCaches: publicProcedure.mutation(() => {
+    const count = graphCache.size;
+    graphCache.clear();
+    buildStateMap.clear();
+    return { cleared: count };
+  }),
 });
