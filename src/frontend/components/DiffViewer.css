@@ -1,0 +1,172 @@
+/* Diff Viewer Styles */
+
+.diff-viewer {
+  display: flex;
+  height: calc(100vh - 100px);
+}
+
+.changed-files-list {
+  width: 300px;
+  border-right: 1px solid #e0e0e0;
+  overflow-y: auto;
+  background-color: #fff;
+}
+
+.changed-files-list .file-item {
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.changed-files-list .file-item:hover {
+  background-color: #f8f9fa;
+}
+
+.changed-files-list .file-item.active {
+  background-color: #e9ecef;
+  border: 1px solid #007bff;
+}
+
+.changed-files-list .file-status {
+  background-color: #6c757d;
+  color: white;
+  border-radius: 10px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.changed-files-list .file-status.added {
+  background-color: #28a745;
+}
+
+.changed-files-list .file-status.removed {
+  background-color: #dc3545;
+}
+
+.changed-files-list .file-status.modified {
+  background-color: #007bff;
+}
+
+.changed-files-list .file-status.renamed {
+  background-color: #6f42c1;
+}
+
+.changed-files-list .file-status.copied {
+  background-color: #fd7e14;
+}
+
+.hunk-viewer {
+  flex: 1;
+  overflow: hidden;
+  padding: 20px;
+}
+
+.hunk-header {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+  background-color: #f8f9fa;
+  padding: 5px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.diff-line {
+  display: flex;
+  padding: 4px 8px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-line-number {
+  color: #666;
+  min-width: 50px;
+  margin-right: 10px;
+}
+
+.diff-line.added {
+  background-color: #d4edda;
+  border-left: 2px solid #28a745;
+}
+
+.diff-line.removed {
+  background-color: #f8d7da;
+  border-left: 2px solid #dc3545;
+}
+
+.diff-line.context {
+  background-color: #f8f9fa;
+  border-left: 2px solid #6c757d;
+}
+
+.diff-line-content {
+  flex: 1;
+}
+
+.no-changes {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.diff-file-title {
+  margin-bottom: 15px;
+  color: #333;
+}
+
+/* Dark mode adjustments */
+
+[data-theme="dark"] .changed-files-list {
+  background-color: #1e1e1e;
+  border-right-color: #333;
+}
+
+[data-theme="dark"] .file-item:hover {
+  background-color: #2d2d2d;
+}
+
+[data-theme="dark"] .file-item.active {
+  background-color: #2a2a2a;
+}
+
+[data-theme="dark"] .file-status {
+  background-color: #6c757d;
+}
+
+[data-theme="dark"] .hunk-header {
+  background-color: #2d2d2d;
+  color: #ccc;
+}
+
+[data-theme="dark"] .diff-line.added {
+  background-color: #1b4332;
+  border-left-color: #28a745;
+}
+
+[data-theme="dark"] .diff-line.removed {
+  background-color: #451a1a;
+  border-left-color: #dc3545;
+}
+
+[data-theme="dark"] .diff-line.context {
+  background-color: #2a2a2a;
+  border-left-color: #6c757d;
+}
+
+[data-theme="dark"] .diff-line-number {
+  color: #aaa;
+}
+
+[data-theme="dark"] .no-changes {
+  color: #ccc;
+}
+
+[data-theme="dark"] .diff-file-title {
+  color: #eee;
+}

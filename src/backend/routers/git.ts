@@ -15,7 +15,7 @@
  */
 
 import { router, publicProcedure } from '../trpc/trpc';
-import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable } from '../git';
+import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff } from '../git';
 
 export const gitRouter = router({
   isAvailable: publicProcedure.query(() => isGitAvailable()),
@@ -38,5 +38,9 @@ export const gitRouter = router({
         removed: fileStats.removed,
       };
     });
+  }),
+
+  getGitDiff: publicProcedure.query(({ ctx }) => {
+    return getGitDiff(ctx.projectRoot);
   }),
 });

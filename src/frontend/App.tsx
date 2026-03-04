@@ -38,6 +38,7 @@ import { Chat } from './pages/Chat';
 import { ConfigurationPage } from './pages/Configuration';
 import { FallbackCli } from './fallback-cli/FallbackCli';
 import { trpc } from '../client/trpc';
+import { DiffViewerPage } from './pages/DiffViewer';
 import './index.css';
 
 function ThemeToggle() {
@@ -109,6 +110,7 @@ function TopNav() {
     location.pathname === '/projects' ||
     location.pathname === '/providers';
   const isCli = location.pathname === '/cli';
+  const isDiff = location.pathname === '/diff';
 
   return (
     <Group
@@ -155,6 +157,17 @@ function TopNav() {
         >
           CLI
         </Link>
+        <Link
+          to="/diff"
+          style={{
+            fontWeight: isDiff ? 600 : 400,
+            color: 'var(--app-text)',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          Diff
+        </Link>
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
@@ -186,6 +199,7 @@ function App() {
           <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
           <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
           <Route path="/cli" element={<FallbackCli />} />
+          <Route path="/diff" element={<DiffViewerPage />} />
         </Routes>
       </Box>
     </BrowserRouter>

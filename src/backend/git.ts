@@ -100,16 +100,21 @@ export function isGitRepository(path: string): boolean {
  * Get the status of all changed files in the repository
  */
 export function getChangedFiles(repoPath: string): GitFileChange[] {
-  if (!isGitRepository(repoPath)) {
-    return [];
+  // First, resolve to actual Git repo root
+  const actualRepoPath = getGitRepoPath(repoPath);
+  if (!actualRepoPath) {
+    return []; // Not in a Git repo
   }
 
   try {
     // Get status with porcelain format for machine-readable output
     const statusOutput = execSync('git status --porcelain=v1', {
-      cwd: repoPath,
+      cwd: actualRepoPath, // Use the discovered root, not the input!
       encoding: 'utf-8',
     });
+    
+    // Debug: Log the raw output
+    console.log('Git status output:', '\n' + statusOutput);
 
     const changes: GitFileChange[] = [];
 
@@ -122,59 +127,70 @@ export function getChangedFiles(repoPath: string): GitFileChange[] {
       // Format examples: " M file.txt" (modified, unstaged), "A  file.txt" (added, staged)
       // Or "??" for untracked files
       
-      // Match format: optional space, then 2 status chars, then space, then path
-      const match = line.match(/^\s?(.)(.)\s+(.+)$/);
-      if (!match) continue;
-
-      // Match groups:
-      // [0] = full line
-      // [1] = optional leading space
-      // [2] = first char of status (index status)
-      // [3] = second char of status (working tree status)
-      // [4] = filepath
-      const firstChar = match[2];
-      const secondChar = match[3];
-      const filePath = match[4];
-
-      // Get the working tree status (second char)
-      // If it's a space, the first char indicates index status only (file unchanged in working tree)
-      // Otherwise, second char is the working tree status
-      const statusChar = secondChar === ' ' ? firstChar : secondChar;
-
-      let status: GitFileChange['status'];
-      switch (statusChar) {
-        case 'M': // Modified
-          status = 'M';
-          break;
-        case 'A': // Added
-          status = 'A';
-          break;
-        case 'D': // Deleted
-          status = 'D';
-          break;
-        case 'R': // Renamed
-          status = 'R';
-          break;
-        case 'C': // Copied
-          status = 'C';
-          break;
-        case '?': // Untracked (from first char if second is space)
-          status = '??';
-          break;
-        default:
-          continue; // Skip unhandled statuses
+      // For untracked files: "?? path"
+      if (line.startsWith('??')) {
+        const filePath = line.substring(2).trim();
+        changes.push({
+          path: filePath,
+          added: 0,
+          removed: 0,
+          status: '??'
+        });
+        continue;
       }
+      
+      // For other cases: "XY path" or "R old -> new"
+      if (line.length >= 3) {
+        const firstChar = line[0];
+        const secondChar = line[1];
+        let filePath = line.substring(2).trim();
 
-      changes.push({
-        path: filePath.trim(),
-        added: 0,
-        removed: 0,
-        status,
-      });
+        // Handle rename format: "R old -> new"
+        // We want to return only the new file path for R status
+        if (firstChar === 'R' && filePath.includes(' -> ')) {
+          // Split on ' -> ' and take the second part (new file path)
+          const parts = filePath.split(' -> ');
+          if (parts.length === 2) {
+            filePath = parts[1].trim();
+          }
+        }
+
+        let status: GitFileChange['status'];
+        
+        if (secondChar === ' ') {
+          // Working tree unchanged, use index status
+          switch (firstChar) {
+            case 'M': status = 'M'; break;
+            case 'A': status = 'A'; break;
+            case 'D': status = 'D'; break;
+            case 'R': status = 'R'; break;
+            case 'C': status = 'C'; break;
+            default: continue;
+          }
+        } else {
+          // Use working tree status (unstaged)
+          switch (secondChar) {
+            case 'M': status = 'M'; break;
+            case 'A': status = 'A'; break;
+            case 'D': status = 'D'; break;
+            case '?': status = '??'; break;
+            default: continue; // Ignore invalid R/C here — they can't appear in working tree status
+          }
+        }
+
+        changes.push({
+          path: filePath,
+          added: 0,
+          removed: 0,
+          status,
+        });
+      }
     }
 
     return changes;
-  } catch {
+  } catch (error) {
+    // Log error in development; return empty in production
+    console.error('Failed to get Git changes:', error);
     return [];
   }
 }
