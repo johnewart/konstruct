@@ -19,7 +19,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import * as codebaseOutline from '../../shared/codebaseOutline';
-import { buildDependencyGraph } from '../../shared/dependencyGraph';
+import { buildDependencyGraph, normalizeEdgeTargetsToKnownFiles } from '../../shared/dependencyGraph';
 import { getGitRepoPath } from '../git';
 
 /** Higher limits for background full-graph build (Code Explorer). */
@@ -271,9 +271,12 @@ export const codebaseRouter = router({
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
+          // Normalize edge targets to known file paths (with extension) so inbound/outbound matching works
+          const knownFiles = new Set(list);
+          const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
           const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
           const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
-          const strippedEdges = allEdges.map((e) => ({
+          const strippedEdges = normalizedEdges.map((e) => ({
             source: stripRootFromPath(e.source, rootPrefix),
             target: stripRootFromPath(e.target, rootPrefix),
             type: e.type,

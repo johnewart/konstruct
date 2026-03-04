@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+/**
+ * Dependency graph types. When the graph is built for the UI (e.g. PR page),
+ * edge targets are normalized to actual file paths (with extension) so that
+ * matching edge.target === activeFile for inbound/outbound works. Stored
+ * paths are repo-relative after stripping in the codebase router.
+ */
+
 /** Node in the dependency graph. */
 export interface DependencyNode {
   path: string;
@@ -21,7 +28,7 @@ export interface DependencyNode {
   type: 'file' | 'module';
 }
 
-/** Edge (import/export/require) between nodes. */
+/** Edge (import/export/require) between nodes. Target should be actual file path with extension for inbound matching. */
 export interface DependencyEdge {
   source: string;
   target: string;
