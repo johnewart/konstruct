@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Badge, Box, Card, Loader, List, Stack, Text, Title, Button, Group, Alert, Tabs, Progress, ActionIcon } from '@mantine/core';
 import { IconMessageCircle, IconChevronDown } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
@@ -79,6 +79,9 @@ export function DiffViewerPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
   const [reviewChatOpen, setReviewChatOpen] = useState(false);
+  const [reviewChatPosition, setReviewChatPosition] = useState<{ x: number; y: number } | null>(null);
+  const reviewChatBoxRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ clientX: number; clientY: number; windowX: number; windowY: number } | null>(null);
   const [frozenThinkingText, setFrozenThinkingText] = useState<string | null>(null);
   const [visibleThinkingLength, setVisibleThinkingLength] = useState(0);
   const { providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
@@ -99,6 +102,36 @@ export function DiffViewerPage() {
       refetchInterval: 600,
     }
   );
+  const reviewChatDragHandlersRef = useRef<{ onMove: (e: MouseEvent) => void; onUp: () => void } | null>(null);
+  const handleReviewChatTitleMouseDown = (e: React.MouseEvent) => {
+    if (e.target instanceof HTMLElement && e.target.closest('button')) return;
+    if (!reviewChatBoxRef.current) return;
+    const rect = reviewChatBoxRef.current.getBoundingClientRect();
+    const windowX = reviewChatPosition?.x ?? rect.left;
+    const windowY = reviewChatPosition?.y ?? rect.top;
+    if (reviewChatPosition === null) setReviewChatPosition({ x: rect.left, y: rect.top });
+    dragStartRef.current = { clientX: e.clientX, clientY: e.clientY, windowX, windowY };
+    const onMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      setReviewChatPosition({
+        x: dragStartRef.current.windowX + (e.clientX - dragStartRef.current.clientX),
+        y: dragStartRef.current.windowY + (e.clientY - dragStartRef.current.clientY),
+      });
+    };
+    const onUp = () => {
+      dragStartRef.current = null;
+      const h = reviewChatDragHandlersRef.current;
+      if (h) {
+        document.removeEventListener('mousemove', h.onMove);
+        document.removeEventListener('mouseup', h.onUp);
+        reviewChatDragHandlersRef.current = null;
+      }
+    };
+    reviewChatDragHandlersRef.current = { onMove, onUp };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   const invalidateOverview = trpc.git.invalidateDiffOverview.useMutation({
     onSuccess: () => {
       utils.git.getDiffOverview.invalidate();
@@ -342,7 +375,7 @@ export function DiffViewerPage() {
                         <Stack gap="md">
                           {overviewData.overview.keyFiles.length > 0 && (
                             <Stack gap="xs">
-                              <Text size="xs" fw={500} c="dimmed">Key files (staged)</Text>
+                              <Text size="xs" fw={500} c="dimmed">Tracked</Text>
                               <List size="sm" spacing="xs">
                                 {overviewData.overview.keyFiles.map((k) => (
                                   <List.Item key={k.path}>
@@ -354,15 +387,15 @@ export function DiffViewerPage() {
                               </List>
                             </Stack>
                           )}
-                          {overviewData.overview.filesNotStaged && overviewData.overview.filesNotStaged.length > 0 && (
+                          {overviewData.overview.filesUntracked && overviewData.overview.filesUntracked.length > 0 && (
                             <Stack gap="xs">
-                              <Text size="xs" fw={500} c="dimmed">Not staged</Text>
+                              <Text size="xs" fw={500} c="dimmed">Untracked</Text>
                               <Stack gap="xs">
-                                {overviewData.overview.filesNotStaged.map((f) => (
+                                {overviewData.overview.filesUntracked.map((f) => (
                                   <Box key={f.path}>
                                     <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{f.path}</Text>
-                                    {f.potentiallyMissingFromStaged && (
-                                      <Text size="xs" c="orange" ml="xs" component="span">(consider staging)</Text>
+                                    {f.suggestTrack && (
+                                      <Text size="xs" c="orange" ml="xs" component="span">(consider tracking)</Text>
                                     )}
                                     {f.description ? (
                                       <Text size="xs" c="dimmed" display="block" mt={2}>{f.description}</Text>
@@ -372,7 +405,7 @@ export function DiffViewerPage() {
                               </Stack>
                             </Stack>
                           )}
-                          {overviewData.overview.keyFiles.length === 0 && (!overviewData.overview.filesNotStaged || overviewData.overview.filesNotStaged.length === 0) && (
+                          {overviewData.overview.keyFiles.length === 0 && (!overviewData.overview.filesUntracked || overviewData.overview.filesUntracked.length === 0) && (
                             <Text size="sm" c="dimmed">No files listed.</Text>
                           )}
                         </Stack>
@@ -506,11 +539,12 @@ export function DiffViewerPage() {
       {/* Floating chat window at bottom */}
       {reviewChatOpen && (
         <Box
+          ref={reviewChatBoxRef}
           style={{
             position: 'fixed',
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
+            ...(reviewChatPosition === null
+              ? { bottom: 24, left: '50%', transform: 'translateX(-50%)' }
+              : { left: reviewChatPosition.x, top: reviewChatPosition.y }),
             width: '66.67%',
             maxWidth: 900,
             height: '35vh',
@@ -524,7 +558,17 @@ export function DiffViewerPage() {
             overflow: 'hidden',
           }}
         >
-          <Group justify="space-between" wrap="nowrap" style={{ padding: '10px 14px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+          <Group
+            justify="space-between"
+            wrap="nowrap"
+            style={{
+              padding: '10px 14px',
+              borderBottom: '1px solid var(--app-border)',
+              flexShrink: 0,
+              cursor: 'move',
+            }}
+            onMouseDown={handleReviewChatTitleMouseDown}
+          >
             <Text size="sm" fw={600}>Chat about this review</Text>
             <ActionIcon variant="subtle" size="sm" aria-label="Minimize" onClick={() => setReviewChatOpen(false)}>
               <IconChevronDown size={18} />

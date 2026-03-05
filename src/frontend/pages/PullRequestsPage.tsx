@@ -97,7 +97,40 @@ export function PullRequestsPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
   const [reviewChatOpen, setReviewChatOpen] = useState(false);
+  const [reviewChatPosition, setReviewChatPosition] = useState<{ x: number; y: number } | null>(null);
+  const reviewChatBoxRef = useRef<HTMLDivElement>(null);
+  const reviewChatDragStartRef = useRef<{ clientX: number; clientY: number; windowX: number; windowY: number } | null>(null);
+  const reviewChatDragHandlersRef = useRef<{ onMove: (e: MouseEvent) => void; onUp: () => void } | null>(null);
   const [prFilter, setPrFilter] = useState('');
+
+  const handleReviewChatTitleMouseDown = (e: React.MouseEvent) => {
+    if (e.target instanceof HTMLElement && e.target.closest('button')) return;
+    if (!reviewChatBoxRef.current) return;
+    const rect = reviewChatBoxRef.current.getBoundingClientRect();
+    const windowX = reviewChatPosition?.x ?? rect.left;
+    const windowY = reviewChatPosition?.y ?? rect.top;
+    if (reviewChatPosition === null) setReviewChatPosition({ x: rect.left, y: rect.top });
+    reviewChatDragStartRef.current = { clientX: e.clientX, clientY: e.clientY, windowX, windowY };
+    const onMove = (e: MouseEvent) => {
+      if (!reviewChatDragStartRef.current) return;
+      setReviewChatPosition({
+        x: reviewChatDragStartRef.current.windowX + (e.clientX - reviewChatDragStartRef.current.clientX),
+        y: reviewChatDragStartRef.current.windowY + (e.clientY - reviewChatDragStartRef.current.clientY),
+      });
+    };
+    const onUp = () => {
+      reviewChatDragStartRef.current = null;
+      const h = reviewChatDragHandlersRef.current;
+      if (h) {
+        document.removeEventListener('mousemove', h.onMove);
+        document.removeEventListener('mouseup', h.onUp);
+        reviewChatDragHandlersRef.current = null;
+      }
+    };
+    reviewChatDragHandlersRef.current = { onMove, onUp };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const { data: githubRepo, isLoading: repoLoading } = trpc.github.getRepo.useQuery();
   const { data: prData, isLoading: prLoading } = trpc.github.listPullRequests.useQuery(
@@ -518,11 +551,12 @@ export function PullRequestsPage() {
             {/* Floating chat window at bottom */}
             {reviewChatOpen && (
               <Box
+                ref={reviewChatBoxRef}
                 style={{
                   position: 'fixed',
-                  bottom: 24,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
+                  ...(reviewChatPosition === null
+                    ? { bottom: 24, left: '50%', transform: 'translateX(-50%)' }
+                    : { left: reviewChatPosition.x, top: reviewChatPosition.y }),
                   width: '66.67%',
                   maxWidth: 900,
                   height: '35vh',
@@ -536,7 +570,17 @@ export function PullRequestsPage() {
                   overflow: 'hidden',
                 }}
               >
-                <Group justify="space-between" wrap="nowrap" style={{ padding: '10px 14px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+                <Group
+                  justify="space-between"
+                  wrap="nowrap"
+                  style={{
+                    padding: '10px 14px',
+                    borderBottom: '1px solid var(--app-border)',
+                    flexShrink: 0,
+                    cursor: 'move',
+                  }}
+                  onMouseDown={handleReviewChatTitleMouseDown}
+                >
                   <Text size="sm" fw={600}>Chat about this review</Text>
                   <ActionIcon variant="subtle" size="sm" aria-label="Minimize" onClick={() => setReviewChatOpen(false)}>
                     <IconChevronDown size={18} />

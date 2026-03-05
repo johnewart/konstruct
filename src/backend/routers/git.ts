@@ -48,8 +48,8 @@ export interface DiffOverviewResult {
   };
   keyFiles: Array<{ path: string; dangerLevel: string; reason?: string }>;
   actionItems: Array<{ text: string; level: 'high' | 'medium' | 'low'; files?: string[] }>;
-  /** Files that appear in the diff but are not staged; optionally flag if they might should be staged. */
-  filesNotStaged?: Array<{ path: string; description: string; potentiallyMissingFromStaged?: boolean }>;
+  /** Untracked files (??); suggestTrack true if the agent thinks this file should be tracked. */
+  filesUntracked?: Array<{ path: string; description: string; suggestTrack?: boolean }>;
 }
 
 const DIFF_OVERVIEW_CACHE_FILE = 'diff-overview.json';
@@ -92,6 +92,11 @@ function diffOverviewKey(projectRoot: string): string {
   return projectRoot;
 }
 
+/** Normalize path for staged-vs-unstaged comparison (slash, trim, no leading ./). */
+function normalizePathForStagedComparison(p: string): string {
+  return p.replace(/\\/g, '/').trim().replace(/^\.\/+/, '');
+}
+
 function getDiffOverviewCachePath(projectId: string): string {
   return path.join(getGlobalConfigDir(), 'projects', projectId, 'cache', DIFF_OVERVIEW_CACHE_FILE);
 }
@@ -107,16 +112,16 @@ function normalizeDiffActionItem(raw: unknown): DiffOverviewResult['actionItems'
   return { text: String(raw), level: 'medium', files: [] };
 }
 
-function normalizeFilesNotStaged(raw: unknown): DiffOverviewResult['filesNotStaged'] {
+function normalizeFilesUntracked(raw: unknown): DiffOverviewResult['filesUntracked'] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((item): item is Record<string, unknown> => item != null && typeof item === 'object' && typeof (item as { path?: unknown }).path === 'string')
     .map((item) => {
-      const o = item as { path: string; description?: string; potentiallyMissingFromStaged?: boolean };
+      const o = item as { path: string; description?: string; suggestTrack?: boolean };
       return {
         path: String(o.path),
         description: typeof o.description === 'string' ? o.description : '',
-        potentiallyMissingFromStaged: o.potentiallyMissingFromStaged === true,
+        suggestTrack: o.suggestTrack === true,
       };
     });
 }
@@ -135,7 +140,15 @@ function readDiffOverviewFromCache(projectId: string): DiffOverviewResult | null
         }))
       : [];
     const actionItems = Array.isArray(data.actionItems) ? data.actionItems.map(normalizeDiffActionItem) : [];
-    const filesNotStaged = normalizeFilesNotStaged(data.filesNotStaged);
+    let filesUntracked = normalizeFilesUntracked(data.filesUntracked);
+    if (filesUntracked.length === 0 && Array.isArray(data.filesNotStaged)) {
+      const legacy = (data.filesNotStaged as Array<{ path?: string; description?: string; potentiallyMissingFromStaged?: boolean }>).map((o) => ({
+        path: String(o?.path ?? ''),
+        description: typeof o?.description === 'string' ? o.description : '',
+        suggestTrack: o?.potentiallyMissingFromStaged === true,
+      }));
+      filesUntracked = legacy;
+    }
     const confidence = normalizeConfidence(data.confidence);
     return {
       title: (data.title as string) ?? '',
@@ -144,7 +157,7 @@ function readDiffOverviewFromCache(projectId: string): DiffOverviewResult | null
       confidence,
       keyFiles,
       actionItems,
-      filesNotStaged,
+      filesUntracked,
     };
   } catch {
     return null;
@@ -302,12 +315,15 @@ export const gitRouter = router({
 
         const progressId = `diff-overview:${projectId}`;
         if (diffOverviewBuilding.has(key)) return { building: true, progressId };
-
-        const stagedPaths = getStagedFilePaths(ctx.projectRoot);
-        const stagedSet = new Set(stagedPaths);
+        diffOverviewBuilding.add(key);
 
         const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
         const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
+        const pathsUntracked = diffFileList.filter((f) => f.status === '??').map((f) => f.path);
+        const trackedSet = new Set(
+          diffFileList.filter((f) => f.status !== '??').map((f) => normalizePathForStagedComparison(f.path))
+        );
+        const trackedList = diffFileList.filter((f) => f.status !== '??').map((f) => f.path);
         const inboundMap = graph ? inboundDepsForDiffFiles(diffFileList, graph.edges) : new Map<string, string[]>();
         const inboundSection = diffFileList
           .map((f) => {
@@ -322,7 +338,6 @@ export const gitRouter = router({
         const providerIdInput = input?.providerId ?? storedProjectModel?.providerId;
         const modelInput = input?.model ?? storedProjectModel?.modelId;
 
-        diffOverviewBuilding.add(key);
         setImmediate(async () => {
           runProgressStore.setRunning(progressId, true);
           runProgressStore.pushProgress(progressId, {
@@ -344,29 +359,30 @@ export const gitRouter = router({
                 confidence: DEFAULT_CONFIDENCE,
                 keyFiles: [],
                 actionItems: [],
-                filesNotStaged: [],
+                filesUntracked: [],
               });
               return;
             }
           const systemPrompt = `You are a diff overview and code review assistant.
 
-The user cares about changes that are STAGED (queued for commit). Only staged files should influence the overall review, confidence score, and "keyFiles" list. Ignore or treat separately any file that is changed in the working tree but NOT staged.
+Consider only TRACKED files (staged or unstaged) for the overall review, confidence score, and "keyFiles" list. Ignore untracked files (??) for the main analysis—do not put untracked paths in keyFiles. For untracked files: list them in "filesUntracked" with a short description; set "suggestTrack" to true only for files that seem important and should likely be tracked (e.g. source code, config that belongs in the repo). If you believe important files are untracked and should be tracked, reduce the quality score and state in the quality "explanation" and "evidence" that you think files are untracked that should be tracked.
 
 Provide a running commentary as you analyze. The user sees this commentary in real time under an "Analyzing" spinner, so emit many short updates as you go—for example: which files or sections you're looking at first, what you're considering next (risk areas, patterns, tests), key observations, and so on. Write in plain language. The more frequent and concrete your updates, the better; the user is waiting and wants to see progress. After your commentary, output the final result as a single JSON object only (no markdown, no code fence). The JSON must have these keys:
 - "title" (short code-based title)
-- "summary" (1–2 sentence code-based summary of changes; focus on staged changes)
-- "review" (a detailed analytical code review: 2–4 paragraphs covering what changed, design/architecture impact, potential risks, and notable patterns or improvements; focus on staged files; use clear paragraphs and be specific about files and behavior)
-- "confidence" (object with three dimensions; each dimension must have "score" (0–100), "explanation" (why this score in 1–3 sentences), and "evidence" (specific references from the diff: file paths, line numbers, or code snippets that support the score)); base scores only on STAGED files:
-  - "quality": code quality, maintainability, clarity, patterns
+- "summary" (1–2 sentence code-based summary of changes; focus on tracked changes)
+- "review" (a detailed analytical code review: 2–4 paragraphs covering what changed, design/architecture impact, potential risks, and notable patterns or improvements; focus on tracked files; use clear paragraphs and be specific about files and behavior)
+- "confidence" (object with three dimensions; each dimension must have "score" (0–100), "explanation" (why this score in 1–3 sentences), and "evidence" (specific references from the diff: file paths, line numbers, or code snippets that support the score)); base scores only on TRACKED files. For "quality": reduce the score and mention in explanation/evidence if you think important files are untracked and should be tracked:
+  - "quality": code quality, maintainability, clarity, patterns; lower score if important files appear untracked
   - "testCoverage": presence and adequacy of tests in or affected by the diff; use 0 if no test changes
   - "security": security implications (input handling, auth, sensitive data, dependencies)
-- "keyFiles" (array of { "path", "dangerLevel", "reason" }; dangerLevel one of: high, medium, low). Include ONLY paths that are in the STAGED list. Do not list unstaged or untracked files here.
+- "keyFiles" (array of { "path", "dangerLevel", "reason" }; dangerLevel one of: high, medium, low). Include ONLY paths that are TRACKED (staged or unstaged). Do not list untracked (??) files here.
 - "actionItems" (array of { "text", "level": "high"|"medium"|"low", "files": string[] })
-- "filesNotStaged" (array of { "path", "description", "potentiallyMissingFromStaged" }). List every file that appears in the diff or that you consider relevant but is NOT in the staged list. For each: "path" (file path), "description" (short note, e.g. "Redis dump; not staged", "Generated artifact"), and "potentiallyMissingFromStaged" (true only if you think this file should likely be staged for this commit; false for build artifacts, dumps, local config, etc.).
+- "filesUntracked" (array of { "path", "description", "suggestTrack" }). List every untracked file (??) from the diff. For each: "path" (file path), "description" (short note, e.g. "Generated artifact", "Local dump"), and "suggestTrack" (true only if you think this file should likely be tracked; false for build artifacts, dumps, local config, etc.).
 
-Provide the analytical "review", the "confidence" breakdown with evidence for each dimension, the structured keyFiles/actionItems, and filesNotStaged.`;
-          const stagedList = stagedPaths.length > 0 ? stagedPaths.join('\n') : '(none)';
-          const userContent = `## Staged files (queued for commit) – use ONLY these for keyFiles and overall score\n${stagedList}\n\n## Local diff (may include unstaged changes)\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nEmit a running commentary as you analyze (many short updates: what you're looking at, considering, noticing). Then output the single JSON object with the required keys, including filesNotStaged for any changed file not in the staged list.`;
+Provide the analytical "review", the "confidence" breakdown with evidence for each dimension, the structured keyFiles/actionItems, and filesUntracked.`;
+          const trackedListStr = trackedList.length > 0 ? trackedList.join('\n') : '(none)';
+          const untrackedList = pathsUntracked.length > 0 ? pathsUntracked.join('\n') : '(none)';
+          const userContent = `## Tracked files (staged or unstaged) – use ONLY these for keyFiles and overall score\nThese are the ONLY paths allowed in "keyFiles". Every path in keyFiles must be exactly one of these.\n${trackedListStr}\n\n## Untracked files (??) – do NOT put these in keyFiles\nList these only in "filesUntracked". Set "suggestTrack" to true for any that seem important and should be tracked.\n${untrackedList}\n\n## Local diff (tracked + untracked)\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nEmit a running commentary as you analyze (many short updates: what you're looking at, considering, noticing). Then output the single JSON object with the required keys. In keyFiles include ONLY paths from the tracked list above. In filesUntracked list every path from the untracked list above; set suggestTrack for any that should be tracked. If important files are untracked, reduce the quality score and say so in the quality explanation and evidence.`;
           const res = await chat(
             [
               { role: 'system', content: systemPrompt },
@@ -417,15 +433,18 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
                 reason: k?.reason != null ? String(k.reason) : undefined,
               }))
             : [];
+          const keyFilesTrackedOnly = rawKeyFiles.filter((k) =>
+            trackedSet.has(normalizePathForStagedComparison(k.path))
+          );
           const overview: DiffOverviewResult = parsed
             ? {
                 title: String(parsed.title ?? ''),
                 summary: String(parsed.summary ?? ''),
                 review: String(parsed.review ?? ''),
                 confidence: normalizeConfidence(parsed.confidence),
-                keyFiles: rawKeyFiles.filter((k) => stagedSet.has(k.path)),
+                keyFiles: keyFilesTrackedOnly,
                 actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems.map(normalizeDiffActionItem) : [],
-                filesNotStaged: normalizeFilesNotStaged(parsed.filesNotStaged),
+                filesUntracked: normalizeFilesUntracked(parsed.filesUntracked),
               }
             : {
                 title: 'Overview',
@@ -434,7 +453,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
                 confidence: DEFAULT_CONFIDENCE,
                 keyFiles: [],
                 actionItems: [],
-                filesNotStaged: [],
+                filesUntracked: [],
               };
           diffOverviewCache.set(key, overview);
           writeDiffOverviewToCache(projectId, overview);
@@ -447,7 +466,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
             confidence: DEFAULT_CONFIDENCE,
             keyFiles: [],
             actionItems: [],
-            filesNotStaged: [],
+            filesUntracked: [],
           });
         } finally {
           runProgressStore.clearProgress(progressId);
