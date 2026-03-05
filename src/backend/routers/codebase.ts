@@ -330,15 +330,26 @@ export const codebaseRouter = router({
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
           setImmediate(() => {
             if (!invalidatedKeys.has(key)) {
-              const knownFiles = new Set(list);
-              const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
               const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
+
+              // Strip absolute paths to project-relative paths BEFORE normalizing
+              // edge targets. This is critical for Python absolute imports:
+              // `from fides.api.db.base_class import Base` resolves to the
+              // package-relative path `fides/api/db/base_class`, which can never
+              // match an absolute known-file path like
+              // `/Users/.../fides/api/db/base_class.py`. By stripping first, both
+              // the edge target and the known-file paths share the same relative
+              // form (`fides/api/db/base_class` vs `fides/api/db/base_class.py`),
+              // so the "try with extension" step in normalizeEdgeTargetsToKnownFiles
+              // resolves them correctly.
               const strippedNodes = allNodes.map((n) => ({ path: canonicalGraphPath(n.path, rootPrefix) }));
-              const strippedEdges = normalizedEdges.map((e) => ({
+              const preStrippedEdges = allEdges.map((e) => ({
                 source: canonicalGraphPath(e.source, rootPrefix),
                 target: canonicalGraphPath(e.target, rootPrefix),
                 type: e.type,
               }));
+              const knownRelativeFiles = new Set(list.map((f) => canonicalGraphPath(f, rootPrefix)));
+              const strippedEdges = normalizeEdgeTargetsToKnownFiles(preStrippedEdges, knownRelativeFiles);
               graphCache.set(key, {
                 nodes: strippedNodes,
                 edges: strippedEdges,
