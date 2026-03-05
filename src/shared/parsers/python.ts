@@ -17,11 +17,88 @@
 /**
  * Python dependency extraction and outline config.
  * Tree-sitter-python: import_statement, import_from_statement.
+ * Simple pytest detection: test files (test_*.py, *_test.py) and test functions/classes.
  */
 
 import * as path from 'path';
 import type { ASTNode, ParsedTree, DependencyExtractor, OutlineConfig } from './types';
 import type { DependencyGraph } from '../dependencyGraphTypes';
+
+/** True if path looks like a pytest test file (test_*.py or *_test.py). */
+export function isTestFilePath(filePath: string): boolean {
+  const base = path.basename(filePath);
+  if (!base.endsWith('.py')) return false;
+  const stem = base.slice(0, -3);
+  return stem.startsWith('test_') || stem.endsWith('_test');
+}
+
+/** One test function or test class found in a Python file. */
+export interface PythonTestEntry {
+  filePath: string;
+  line: number;
+  name: string;
+  kind: 'test_function' | 'test_class';
+}
+
+function findFirstChildByType(n: ASTNode, type: string): ASTNode | null {
+  for (let i = 0; i < n.childCount; i++) {
+    const c = n.child(i);
+    if (c && c.type === type) return c;
+  }
+  return null;
+}
+
+function getDeclarationName(sourceCode: string, node: ASTNode): string {
+  const id = findFirstChildByType(node, 'identifier');
+  if (id) return sourceCode.slice(id.startIndex, id.endIndex).trim();
+  return '';
+}
+
+/**
+ * Extract test functions (name starting with test_) and test classes (name starting with Test).
+ * Use with the same tree as extractDependencies for no extra parse.
+ */
+export function getTestEntries(
+  sourceCode: string,
+  tree: ParsedTree,
+  filePath: string
+): PythonTestEntry[] {
+  const entries: PythonTestEntry[] = [];
+
+  function walk(node: ASTNode | null) {
+    if (!node) return;
+
+    if (node.type === 'function_definition') {
+      const name = getDeclarationName(sourceCode, node);
+      if (name.startsWith('test_')) {
+        entries.push({
+          filePath,
+          line: node.startPosition.row + 1,
+          name,
+          kind: 'test_function',
+        });
+      }
+    } else if (node.type === 'class_definition') {
+      const name = getDeclarationName(sourceCode, node);
+      if (name.startsWith('Test')) {
+        entries.push({
+          filePath,
+          line: node.startPosition.row + 1,
+          name,
+          kind: 'test_class',
+        });
+      }
+    }
+
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child) walk(child);
+    }
+  }
+
+  walk(tree.rootNode);
+  return entries;
+}
 
 /** Get full text of a node (for dotted_name we get e.g. "foo.bar"). */
 function nodeText(sourceCode: string, n: ASTNode): string {

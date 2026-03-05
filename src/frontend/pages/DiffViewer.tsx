@@ -265,7 +265,7 @@ export function DiffViewerPage() {
               minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
-              overflow: 'visible',
+              overflow: 'hidden',
             }}
           >
             <Group
@@ -298,7 +298,7 @@ export function DiffViewerPage() {
               style={
                 overviewData?.building
                   ? { flex: 'none', overflow: 'visible' }
-                  : { flex: 1, minHeight: 0, overflow: 'auto' }
+                  : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
               }
             >
               {overviewData?.building ? (
@@ -336,19 +336,37 @@ export function DiffViewerPage() {
                 ) : null}
               </Box>
             ) : overviewData?.overview ? (
-              <Box p="md" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <Box p="md" style={{ display: 'flex', flexDirection: 'column', gap: 0, flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 <Box style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                  <Card withBorder p="md" style={{ flex: '1.5', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', backgroundColor: 'var(--app-surface)' }}>
-                    <Text size="sm" fw={600} mb="xs" c="dimmed">Summary</Text>
-                    <Title order={4} mt={0} mb="xs">{overviewData.overview.title}</Title>
-                    <Text size="md" mb="sm" c="dimmed">{overviewData.overview.summary}</Text>
-                    <Box className="markdown-body" style={{ fontSize: '1rem', lineHeight: 1.6, flex: 1, minHeight: 0, overflow: 'auto' }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
-                        {overviewData.overview.review || overviewData.overview.summary}
-                      </ReactMarkdown>
-                    </Box>
-                  </Card>
-                  <Box style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0, overflow: 'hidden' }}>
+                  <Box style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
+                    <Card withBorder p="md" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--app-surface)' }}>
+                      <Text size="sm" fw={600} mb="xs" c="dimmed">Summary</Text>
+                      <Title order={4} mt={0} mb="xs">{overviewData.overview.title}</Title>
+                      <Text size="md" mb="sm" c="dimmed">{overviewData.overview.summary}</Text>
+                      <Box className="markdown-body" style={{ fontSize: '1rem', lineHeight: 1.6, flex: 1, minHeight: 0, overflow: 'auto' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                          {overviewData.overview.review || overviewData.overview.summary}
+                        </ReactMarkdown>
+                      </Box>
+                    </Card>
+                    {overviewData.overview.actionItems.length > 0 && (
+                      <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
+                        <Text size="sm" fw={600} mb="xs">Things to look for</Text>
+                        <List size="sm" spacing="xs">
+                          {overviewData.overview.actionItems.map((item, i) => (
+                            <List.Item key={i}>
+                              <LevelBadge level={item.level} />
+                              <Text component="span" size="sm" ml="xs">{item.text}</Text>
+                              {item.files?.length ? (
+                                <Text size="xs" c="dimmed" ml="xs" component="span">({item.files.join(', ')})</Text>
+                              ) : null}
+                            </List.Item>
+                          ))}
+                        </List>
+                      </Card>
+                    )}
+                  </Box>
+                  <Box style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
                     <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
                       <Text size="sm" fw={600} mb="sm">Confidence</Text>
                       {overviewData.overview.confidence && (['quality', 'testCoverage', 'security'] as const).map((key) => {
@@ -413,22 +431,6 @@ export function DiffViewerPage() {
                     </Card>
                   </Box>
                 </Box>
-                {overviewData.overview.actionItems.length > 0 && (
-                  <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
-                    <Text size="sm" fw={600} mb="xs">Things to look for</Text>
-                    <List size="sm" spacing="xs">
-                      {overviewData.overview.actionItems.map((item, i) => (
-                        <List.Item key={i}>
-                          <LevelBadge level={item.level} />
-                          <Text component="span" size="sm" ml="xs">{item.text}</Text>
-                          {item.files?.length ? (
-                            <Text size="xs" c="dimmed" ml="xs" component="span">({item.files.join(', ')})</Text>
-                          ) : null}
-                        </List.Item>
-                      ))}
-                    </List>
-                  </Card>
-                )}
                 {reviewChatSession?.suggestedImprovements?.length ? (
                   <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
                     <Text size="sm" fw={600} mb="xs">Suggested improvements (from chat)</Text>

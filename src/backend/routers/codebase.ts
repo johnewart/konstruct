@@ -311,8 +311,7 @@ export const codebaseRouter = router({
           }
           if (end < list.length) {
             const nextStart = end;
-            const delay = nextStart < batchEnd ? 0 : CHUNK_YIELD_MS;
-            setTimeout(() => parseBatch(nextStart), delay);
+            setTimeout(() => parseBatch(nextStart), CHUNK_YIELD_MS);
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
