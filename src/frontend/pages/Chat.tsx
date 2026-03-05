@@ -477,6 +477,7 @@ export function Chat() {
     onSuccess: (data) => {
       setRunCancelled(false);
       setRunPendingSince(Date.now());
+      setPendingUserMessage(null);
       if (sessionId) {
         // Update session cache immediately so UI shows new messages (handles fast runs where refetch effect may not fire)
         if (data) utils.sessions.get.setData({ id: sessionId }, data);

@@ -113,6 +113,7 @@ export function UnifiedChatPanel({
   const sendMessage = trpc.chat.sendMessage.useMutation({
     onSuccess: (_data, variables) => {
       setRunPendingSince(Date.now());
+      setPendingUserMessage(null);
       utils.sessions.get.invalidate({ id: variables.sessionId });
     },
   });

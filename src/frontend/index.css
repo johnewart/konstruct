@@ -261,7 +261,8 @@ body {
   line-height: 1.6;
   color: var(--mantine-color-text);
   background-color: var(--mantine-color-body);
-  padding: clamp(12px, 2vw, 20px);
+  margin: 0;
+  padding: 0;
 }
 
 .container {
@@ -522,8 +523,9 @@ body {
 .plan-modal__content table {
   font-size: 0.95em;
   border-collapse: collapse;
-  width: 100%;
-  margin: 1.25em 0;
+  width: auto;
+  max-width: 100%;
+  margin: 1.25em;
 }
 
 .markdown-body th,

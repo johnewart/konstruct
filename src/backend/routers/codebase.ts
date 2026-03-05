@@ -25,6 +25,8 @@ import { getGitRepoPath } from '../git';
 /** Higher limits for background full-graph build (Code Explorer). */
 const CODE_EXPLORER_MAX_FILES = 5000;
 const PARSING_BATCH_SIZE = 25;
+/** Process this many files per tick so we yield often and can respond to progress polls. */
+const PARSING_YIELD_EVERY = 5;
 /** Delay (ms) between chunks so the event loop can run and CPU doesn't peg. */
 const CHUNK_YIELD_MS = 8;
 /** Cache TTL: dependency graph entries expire after 1 hour. */
@@ -177,7 +179,21 @@ export const codebaseRouter = router({
         };
       }
 
-      if (currentBuildKey !== null && currentBuildKey !== key) {
+      if (currentBuildKey !== null) {
+        if (currentBuildKey === key) {
+          return {
+            error: null,
+            nodes: [],
+            edges: [],
+            truncated: false,
+            building: true,
+            phase: 'parsing',
+            filesProcessed: 0,
+            totalFiles: 0,
+            currentDir: undefined,
+            pathStripPrefix,
+          };
+        }
         const otherState = buildStateMap.get(currentBuildKey);
         if (otherState && otherState.phase !== 'error') {
           return {
@@ -265,8 +281,9 @@ export const codebaseRouter = router({
         const projectRoot = ctx.projectRoot;
 
         function parseBatch(startIndex: number) {
-          const end = Math.min(startIndex + PARSING_BATCH_SIZE, list.length);
-          for (let i = startIndex; i < end; i++) {
+          const batchEnd = Math.min(startIndex + PARSING_BATCH_SIZE, list.length);
+          const yieldEnd = Math.min(startIndex + PARSING_YIELD_EVERY, batchEnd);
+          for (let i = startIndex; i < yieldEnd; i++) {
             const fullPath = list[i];
             try {
               const source = fs.readFileSync(fullPath, 'utf-8');
@@ -282,6 +299,7 @@ export const codebaseRouter = router({
               // skip unreadable files
             }
           }
+          const end = yieldEnd;
           buildStateMap.set(key, {
             phase: 'parsing',
             filesProcessed: end,
@@ -292,7 +310,9 @@ export const codebaseRouter = router({
             console.log(`[codebase] Parsing: ${end}/${list.length} files (${allNodes.length} nodes, ${allEdges.length} edges)`);
           }
           if (end < list.length) {
-            setTimeout(() => parseBatch(end), CHUNK_YIELD_MS);
+            const nextStart = end;
+            const delay = nextStart < batchEnd ? 0 : CHUNK_YIELD_MS;
+            setTimeout(() => parseBatch(nextStart), delay);
             return;
           }
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
@@ -340,7 +360,10 @@ export const codebaseRouter = router({
       };
     }),
 
-  /** Clear cached dependency graph for a path so the next getDependencyGraph will rebuild. */
+  /** Clear cached dependency graph for a path so the next getDependencyGraph will rebuild.
+   * If a build for this key is currently running, we do not clear its state or allow a new build
+   * to start; we only clear the cache and mark the key invalidated so when the current build
+   * completes it will not cache, and the next request will start a fresh build. */
   invalidateDependencyGraph: publicProcedure
     .input(
       z.object({
@@ -351,9 +374,10 @@ export const codebaseRouter = router({
       const pathArg = input?.path?.trim() ?? '.';
       const key = cacheKey(ctx.projectRoot, pathArg);
       graphCache.delete(key);
-      buildStateMap.delete(key);
       invalidatedKeys.add(key);
-      if (currentBuildKey === key) currentBuildKey = null;
+      if (currentBuildKey !== key) {
+        buildStateMap.delete(key);
+      }
       return { invalidated: true };
     }),
 
