@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { buildDependencyGraph } from '../shared/dependencyGraph';
+import { buildDependencyGraph } from './dependencyGraph';
 
 describe('debug', () => {
   it('debug imports', () => {

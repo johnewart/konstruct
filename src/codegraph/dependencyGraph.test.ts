@@ -20,7 +20,7 @@ import * as path from 'path';
 import {
   buildDependencyGraph,
   normalizeEdgeTargetsToKnownFiles,
-} from '../shared/dependencyGraph';
+} from './dependencyGraph';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 

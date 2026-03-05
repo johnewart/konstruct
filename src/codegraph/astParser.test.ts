@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { outlineFile } from '../shared/codebaseOutline';
+import { outlineFile } from './codebaseOutline';
 
 // Helper function to read test files
 function readTestFile(filename: string): string {

@@ -15,9 +15,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getParser } from '../shared/ast';
-import { getTestEntries, isTestFilePath } from '../shared/parsers/python';
-import type { ParsedTree } from '../shared/parsers/types';
+import { getParser } from './ast';
+import { getTestEntries, isTestFilePath } from './parsers/python';
+import type { ParsedTree } from './parsers/types';
 
 function parsePython(sourceCode: string): ParsedTree | null {
   const parser = getParser('py');

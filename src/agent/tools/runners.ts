@@ -20,7 +20,7 @@ import { execSync } from 'child_process';
 import { resolvePath, getProjectRoot, registerTool } from './executor';
 import * as documentStore from '../../shared/documentStore';
 import * as sessionStore from '../../shared/sessionStore';
-import * as codebaseOutline from '../../shared/codebaseOutline';
+import * as codebaseOutline from '../../codegraph/codebaseOutline';
 import type { ToolContext, ToolResult } from './executor';
 
 function num(v: unknown): number | undefined {

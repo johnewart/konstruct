@@ -18,8 +18,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import * as codebaseOutline from '../../shared/codebaseOutline';
-import { buildDependencyGraph, normalizeEdgeTargetsToKnownFiles } from '../../shared/dependencyGraph';
+import * as codebaseOutline from '../../codegraph/codebaseOutline';
+import { buildDependencyGraph, normalizeEdgeTargetsToKnownFiles } from '../../codegraph/dependencyGraph';
 import { getGitRepoPath } from '../git';
 
 /** Higher limits for background full-graph build (Code Explorer). */
