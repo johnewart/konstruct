@@ -22,7 +22,7 @@ import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff,
 import type { GitDiffFile } from '../git';
 import { getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import * as sessionStore from '../../shared/sessionStore';
-import { getCachedDependencyGraph } from './codebase';
+// import { getCachedDependencyGraph } from './codebase';
 import { chat } from '../../shared/llm';
 import { getAllProviders } from '../../shared/providers';
 import * as runProgressStore from '../../agent/runProgressStore';
@@ -317,7 +317,7 @@ export const gitRouter = router({
         if (diffOverviewBuilding.has(key)) return { building: true, progressId };
         diffOverviewBuilding.add(key);
 
-        const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
+        const graph = undefined; // getCachedDependencyGraph(ctx.projectRoot, '.');
         const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
         const pathsUntracked = diffFileList.filter((f) => f.status === '??').map((f) => f.path);
         const trackedSet = new Set(

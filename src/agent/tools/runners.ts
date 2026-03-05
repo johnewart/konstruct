@@ -20,7 +20,7 @@ import { execSync } from 'child_process';
 import { resolvePath, getProjectRoot, registerTool } from './executor';
 import * as documentStore from '../../shared/documentStore';
 import * as sessionStore from '../../shared/sessionStore';
-import * as codebaseOutline from '../../codegraph/codebaseOutline';
+// import * as codebaseOutline from '../../../tmp/codebaseOutline';
 import type { ToolContext, ToolResult } from './executor';
 
 function num(v: unknown): number | undefined {
@@ -305,34 +305,34 @@ registerTool('search_code', (args, context): ToolResult => {
   return { result: out };
 });
 
-registerTool('codebase_outline', (args, context): ToolResult => {
-  const pathArg = str(args.path);
-  if (!pathArg) return { error: 'missing path argument' };
-  const glob = str(args.glob);
-  const root = getProjectRoot(context);
-  const resolved = resolvePath(pathArg, context);
-  if ('error' in resolved) return { error: resolved.error };
-  try {
-    const { outline, truncated } = codebaseOutline.outlinePath(
-      root,
-      pathArg,
-      glob ?? undefined
-    );
-    const result = truncated
-      ? outline + '\n\n(truncated; narrow path or glob to see more)'
-      : outline;
-    return { result };
-  } catch (err) {
-    const loadErr = codebaseOutline.getOutlineLoadError();
-    if (loadErr) {
-      return {
-        error:
-          'Tree-sitter could not be loaded (native module missing). Use list_files and read_file_region to explore. To enable: run the server with Node, or run `npm rebuild tree-sitter tree-sitter-javascript tree-sitter-python tree-sitter-typescript` and restart.',
-      };
-    }
-    return { error: `codebase_outline failed: ${err}` };
-  }
-});
+// registerTool('codebase_outline', (args, context): ToolResult => {
+//   const pathArg = str(args.path);
+//   if (!pathArg) return { error: 'missing path argument' };
+//   const glob = str(args.glob);
+//   const root = getProjectRoot(context);
+//   const resolved = resolvePath(pathArg, context);
+//   if ('error' in resolved) return { error: resolved.error };
+//   try {
+//     const { outline, truncated } = codebaseOutline.outlinePath(
+//       root,
+//       pathArg,
+//       glob ?? undefined
+//     );
+//     const result = truncated
+//       ? outline + '\n\n(truncated; narrow path or glob to see more)'
+//       : outline;
+//     return { result };
+//   } catch (err) {
+//     const loadErr = codebaseOutline.getOutlineLoadError();
+//     if (loadErr) {
+//       return {
+//         error:
+//           'Tree-sitter could not be loaded (native module missing). Use list_files and read_file_region to explore. To enable: run the server with Node, or run `npm rebuild tree-sitter tree-sitter-javascript tree-sitter-python tree-sitter-typescript` and restart.',
+//       };
+//     }
+//     return { error: `codebase_outline failed: ${err}` };
+//   }
+// });
 
 registerTool('edit_file', (args, context): ToolResult => {
   const pathArg = str(args.path);

@@ -17,6 +17,10 @@
 import { afterEach, expect, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { analyzer } from '../codegraph/analyzer';
+
+// Make analyzer available globally for tests that don't import it directly
+(globalThis as any).analyzer = analyzer;
 
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {

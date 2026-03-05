@@ -17,20 +17,25 @@
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 
-export type DepNode = { path: string; name?: string; type?: 'file' | 'module' };
+export type DepNode = { id?: string; path: string; name?: string; type?: 'file' | 'module' };
 export type DepEdge = { source: string; target: string; type: string };
 
 type D3Node = DepNode & { x?: number; y?: number; vx?: number; vy?: number };
 type D3Link = { source: D3Node; target: D3Node };
 
+/** Node key for graph topology: id (file:// or lib://) when present, else path. */
+function nodeKey(n: DepNode): string {
+  return n.id ?? n.path;
+}
+
 function buildGraph(nodes: DepNode[], edges: DepEdge[]): { nodes: D3Node[]; links: D3Link[] } {
   const nodeById = new Map<string, D3Node>();
-  nodes.forEach((n) => nodeById.set(n.path, { ...n }));
+  nodes.forEach((n) => nodeById.set(nodeKey(n), { ...n }));
   edges.forEach((e) => {
     if (!nodeById.has(e.source))
-      nodeById.set(e.source, { path: e.source, name: e.source.split(/[/\\]/).pop() ?? e.source, type: 'module' });
+      nodeById.set(e.source, { path: e.source, name: e.source.replace(/^file:\/\/|^lib:\/\//, '').split(/[/\\]/).pop() ?? e.source, type: 'module' });
     if (!nodeById.has(e.target))
-      nodeById.set(e.target, { path: e.target, name: e.target.split(/[/\\]/).pop() ?? e.target, type: 'module' });
+      nodeById.set(e.target, { path: e.target, name: e.target.replace(/^file:\/\/|^lib:\/\//, '').split(/[/\\]/).pop() ?? e.target, type: 'module' });
   });
   const nodeList = Array.from(nodeById.values());
   const links: D3Link[] = edges.map((e) => ({
@@ -96,9 +101,9 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
     if (d3Nodes.length === 0) return;
 
     const inDegree = new Map<string, number>();
-    links.forEach((l) => inDegree.set(l.target.path, (inDegree.get(l.target.path) ?? 0) + 1));
+    links.forEach((l) => inDegree.set(nodeKey(l.target), (inDegree.get(nodeKey(l.target)) ?? 0) + 1));
     const getRadius = (d: D3Node) =>
-      Math.min(MAX_NODE_RADIUS, MIN_NODE_RADIUS + (inDegree.get(d.path) ?? 0) * RADIUS_PER_INBOUND);
+      Math.min(MAX_NODE_RADIUS, MIN_NODE_RADIUS + (inDegree.get(nodeKey(d)) ?? 0) * RADIUS_PER_INBOUND);
 
     const width = size.width;
     const height = size.height;
@@ -147,15 +152,15 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
         event.stopPropagation();
         setSelectedRef.current(d);
       });
-    node.append('title').text((d) => stripRoot(d.path, pathStripPrefix));
+    node.append('title').text((d) => (d.id?.startsWith('file://') ? stripRoot(d.path, pathStripPrefix) : d.path));
 
     function nodeDir(d: D3Node): string {
-      const stripped = stripRoot(d.path, pathStripPrefix);
+      const stripped = d.id?.startsWith('file://') ? stripRoot(d.path, pathStripPrefix) : d.path;
       return stripped.includes('/') ? stripped.split('/').slice(0, -1).join('/') : '';
     }
     /** Number of path segments under the explored path (e.g. fides/api/foo → 3). */
     function nodeDepth(d: D3Node): number {
-      const stripped = stripRoot(d.path, pathStripPrefix);
+      const stripped = d.id?.startsWith('file://') ? stripRoot(d.path, pathStripPrefix) : d.path;
       const segments = stripped.split('/').filter(Boolean);
       return Math.max(1, segments.length);
     }
@@ -183,7 +188,7 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
       .forceSimulation<D3Node>(d3Nodes)
       .force(
         'link',
-        d3.forceLink<D3Node, D3Link>(links).id((d) => d.path).distance(60)
+        d3.forceLink<D3Node, D3Link>(links).id((d) => nodeKey(d)).distance(60)
       )
       .force('charge', d3.forceManyBody().strength(-200))
       .force('center', d3.forceCenter(centerX, centerY))
@@ -218,7 +223,7 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
 
       const dirToNodes = new Map<string, D3Node[]>();
       d3Nodes.forEach((d) => {
-        const stripped = stripRoot(d.path, pathStripPrefix);
+        const stripped = d.id?.startsWith('file://') ? stripRoot(d.path, pathStripPrefix) : d.path;
         const dir = stripped.includes('/') ? stripped.split('/').slice(0, -1).join('/') : '';
         if (dir === '') return;
         if (!dirToNodes.has(dir)) dirToNodes.set(dir, []);
@@ -296,7 +301,7 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
             boxShadow: '0 2px 8px var(--app-shadow)',
           }}
         >
-          {stripRoot(selectedNode.path, pathStripPrefix)}
+          {selectedNode.id?.startsWith('file://') ? stripRoot(selectedNode.path, pathStripPrefix) : selectedNode.path}
         </div>
       )}
     </div>

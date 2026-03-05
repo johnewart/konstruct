@@ -27,6 +27,7 @@
  * Query params on GET /mcp:
  *   projectRoot  - absolute path for tool path resolution (default: cwd)
  *   mode         - Konstruct mode whose toolset to expose (default: implementation = all tools)
+ *   allowedTools - optional comma-separated list of tool names; when set, only these tools from the mode are exposed (e.g. for limiting Claude to a subset)
  */
 
 import '../agent/tools/runners.ts'; // register all tool implementations
@@ -44,6 +45,8 @@ interface McpSession {
   modeId: string;
   /** Konstruct chat session id (optional); when set, session-scoped tools (list_todos, add_todo, etc.) work. */
   konstructSessionId?: string;
+  /** When set, only these tool names from the mode are exposed (e.g. read_file_region,grep). */
+  allowedTools?: Set<string>;
 }
 
 const sessions = new Map<string, McpSession>();
@@ -103,8 +106,11 @@ async function dispatchRequest(
       break;
 
     case 'tools/list': {
-      const tools = getToolsForMode(session.modeId).map(toMcpTool);
-      respond({ tools });
+      let list = getToolsForMode(session.modeId);
+      if (session.allowedTools?.size) {
+        list = list.filter((t) => session.allowedTools!.has(t.function.name));
+      }
+      respond({ tools: list.map(toMcpTool) });
       break;
     }
 
@@ -112,6 +118,10 @@ async function dispatchRequest(
       const p = body.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
       if (!p?.name) {
         respondError(-32602, 'Missing tool name');
+        return;
+      }
+      if (session.allowedTools?.size && !session.allowedTools.has(p.name)) {
+        respondError(-32602, `Tool "${p.name}" is not allowed in this session`);
         return;
       }
       log.debug('mcp tools/call', p.name, 'project:', session.projectRoot);
@@ -161,6 +171,11 @@ export function handleMcpSse(
   const projectRoot = url.searchParams.get('projectRoot') ?? process.cwd();
   const modeId = url.searchParams.get('mode') ?? 'implementation';
   const konstructSessionId = url.searchParams.get('konstructSessionId') ?? undefined;
+  const allowedToolsParam = url.searchParams.get('allowedTools');
+  const allowedTools =
+    allowedToolsParam?.length
+      ? new Set(allowedToolsParam.split(',').map((s) => s.trim()).filter(Boolean))
+      : undefined;
   const baseUrl = getBaseUrl(req);
   const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${mcpSessionId}`;
 
@@ -171,7 +186,7 @@ export function handleMcpSse(
     'Access-Control-Allow-Origin': '*',
   });
 
-  const session: McpSession = { res, projectRoot, modeId, konstructSessionId };
+  const session: McpSession = { res, projectRoot, modeId, konstructSessionId, allowedTools };
   sessions.set(mcpSessionId, session);
 
   // Send full URL so Claude (or any MCP client) can POST without knowing the server origin

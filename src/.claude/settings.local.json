@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/johnewart/Code/konstruct-2/konstruct/**)",
+      "Bash(npx vitest run src/codegraph/specCompliance.test.ts)",
+      "Bash(npx vitest:*)"
+    ]
+  }
+}

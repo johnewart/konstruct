@@ -39,7 +39,7 @@ import {
   Text,
   Menu,
 } from '@mantine/core';
-import { IconPlayerPlay, IconPlayerStop } from '@tabler/icons-react';
+import { IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
 
 // Git changes list component
 function GitChangesList() {
@@ -213,6 +213,11 @@ function buildWorkLogEntries(messages: ChatMsg[]): Array<{
   return entries;
 }
 
+// Attachment types (plan from sidebar, or user-added text)
+type PlanAttachment =
+  | { type: 'plan'; name: string; content: string }
+  | { type: 'text'; name: string; content: string };
+
 // Message queue type
 type QueuedMessage = {
   id: string;
@@ -250,10 +255,12 @@ export function Chat() {
   // Message queue state
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
 
-  type PlanAttachment = { type: 'plan'; name: string; content: string };
   const [attachmentsBySession, setAttachmentsBySession] = useState<
     Record<string, PlanAttachment[]>
   >({});
+  const [addAttachmentModalOpen, setAddAttachmentModalOpen] = useState(false);
+  const [newAttachmentName, setNewAttachmentName] = useState('');
+  const [newAttachmentContent, setNewAttachmentContent] = useState('');
   const attachments = sessionId ? (attachmentsBySession[sessionId] ?? []) : [];
   const setAttachments = useCallback(
     (
@@ -698,8 +705,8 @@ export function Chat() {
       if (attachments.length === 0) return text;
       let out = text;
       for (const a of attachments) {
-        if (a.type === 'plan')
-          out += `\n\n---\n### Plan: ${a.name}\n\n${a.content}\n---\n`;
+        const label = a.type === 'plan' ? `Plan: ${a.name}` : a.name;
+        out += `\n\n\`\`\`${label}\n${a.content}\n\`\`\`\n`;
       }
       return out;
     },
@@ -912,7 +919,8 @@ export function Chat() {
       !contextModalOpen &&
       !planModalName &&
       !ruleModalName &&
-      !transcriptModalOpen
+      !transcriptModalOpen &&
+      !addAttachmentModalOpen
     )
       return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -921,11 +929,12 @@ export function Chat() {
         setPlanModalName(null);
         setRuleModalName(null);
         setTranscriptModalOpen(false);
+        setAddAttachmentModalOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [contextModalOpen, planModalName, ruleModalName, transcriptModalOpen]);
+  }, [contextModalOpen, planModalName, ruleModalName, transcriptModalOpen, addAttachmentModalOpen]);
 
   useEffect(() => {
     // Handle Shift+Tab to cycle through modes
@@ -936,7 +945,8 @@ export function Chat() {
         !contextModalOpen &&
         !planModalName &&
         !ruleModalName &&
-        !transcriptModalOpen
+        !transcriptModalOpen &&
+        !addAttachmentModalOpen
       ) {
         e.preventDefault();
         if (!modes || modes.length === 0) return;
@@ -954,6 +964,7 @@ export function Chat() {
     planModalName,
     ruleModalName,
     transcriptModalOpen,
+    addAttachmentModalOpen,
   ]);
 
   return (
@@ -1692,39 +1703,53 @@ export function Chat() {
                     </Accordion.Control>
                     <Accordion.Panel>
                       <div className="chat-attachments">
+                        <Button
+                          type="button"
+                          variant="light"
+                          size="xs"
+                          leftSection={<IconPlus size={14} />}
+                          onClick={() => {
+                            setNewAttachmentName('');
+                            setNewAttachmentContent('');
+                            setAddAttachmentModalOpen(true);
+                          }}
+                          disabled={!sessionId}
+                          fullWidth
+                          mb="xs"
+                        >
+                          Add an attachment
+                        </Button>
                         {attachments.length === 0 ? (
                           <p className="chat-panel-empty">
-                            No attachments. Drop a plan from the sidebar.
+                            No attachments. Add one above or drop a plan from the sidebar.
                           </p>
                         ) : (
                           <ul className="chat-attachments__list">
-                            {attachments.map((a, i) =>
-                              a.type === 'plan' ? (
-                                <li
-                                  key={`plan-${a.name}-${i}`}
-                                  className="chat-attachments__item"
+                            {attachments.map((a, i) => (
+                              <li
+                                key={`${a.type}-${a.name}-${i}`}
+                                className="chat-attachments__item"
+                              >
+                                <span className="chat-attachments__label">
+                                  {a.type === 'plan' ? `Plan: ${a.name}` : a.name}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="subtle"
+                                  size="compact-xs"
+                                  color="red"
+                                  onClick={() =>
+                                    setAttachments((prev) =>
+                                      prev.filter((_, idx) => idx !== i)
+                                    )
+                                  }
+                                  title="Remove attachment"
+                                  aria-label={`Remove ${a.name}`}
                                 >
-                                  <span className="chat-attachments__label">
-                                    Plan: {a.name}
-                                  </span>
-                                  <Button
-                                    type="button"
-                                    variant="subtle"
-                                    size="compact-xs"
-                                    color="red"
-                                    onClick={() =>
-                                      setAttachments((prev) =>
-                                        prev.filter((_, idx) => idx !== i)
-                                      )
-                                    }
-                                    title="Remove attachment"
-                                    aria-label={`Remove ${a.name}`}
-                                  >
-                                    ×
-                                  </Button>
-                                </li>
-                              ) : null
-                            )}
+                                  ×
+                                </Button>
+                              </li>
+                            ))}
                           </ul>
                         )}
                       </div>
@@ -2126,6 +2151,86 @@ export function Chat() {
                         </Button>
                       </div>
                     )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {addAttachmentModalOpen && (
+              <div
+                className="context-modal-overlay plan-modal-overlay"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="add-attachment-modal-title"
+                onClick={(e) =>
+                  e.target === e.currentTarget && setAddAttachmentModalOpen(false)
+                }
+              >
+                <div className="context-modal plan-modal rule-modal">
+                  <div className="context-modal__header">
+                    <h2 id="add-attachment-modal-title">Add an attachment</h2>
+                    <ActionIcon
+                      type="button"
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => setAddAttachmentModalOpen(false)}
+                      aria-label="Close"
+                    >
+                      ×
+                    </ActionIcon>
+                  </div>
+                  <div className="context-modal__body plan-modal__body rule-modal__body">
+                    <div className="rule-modal__name-row" style={{ marginBottom: 12 }}>
+                      <label htmlFor="attachment-name">Name</label>
+                      <TextInput
+                        id="attachment-name"
+                        placeholder="e.g. Example response"
+                        value={newAttachmentName}
+                        onChange={(e) =>
+                          setNewAttachmentName(e.currentTarget.value)
+                        }
+                        size="sm"
+                      />
+                    </div>
+                    <div style={{ marginBottom: 16 }}>
+                      <label htmlFor="attachment-content">Content</label>
+                      <Textarea
+                        id="attachment-content"
+                        value={newAttachmentContent}
+                        onChange={(e) =>
+                          setNewAttachmentContent(e.currentTarget.value)
+                        }
+                        placeholder="Paste or type content to attach (e.g. examples for the agent). This will be included with your messages."
+                        minRows={8}
+                        autosize
+                        styles={{ input: { fontFamily: 'inherit' } }}
+                      />
+                    </div>
+                    <div className="rule-modal__actions">
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        onClick={() => setAddAttachmentModalOpen(false)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={!newAttachmentName.trim()}
+                        onClick={() => {
+                          const name = newAttachmentName.trim();
+                          if (!name) return;
+                          setAttachments((prev) => [
+                            ...prev,
+                            { type: 'text', name, content: newAttachmentContent },
+                          ]);
+                          setNewAttachmentName('');
+                          setNewAttachmentContent('');
+                          setAddAttachmentModalOpen(false);
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>

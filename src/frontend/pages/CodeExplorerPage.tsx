@@ -32,8 +32,36 @@ import {
   List,
 } from '@mantine/core';
 import { IconChevronRight, IconChevronDown, IconFile } from '@tabler/icons-react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import oneDark from 'react-syntax-highlighter/dist/esm/styles/prism/one-dark';
 import { trpc } from '../../client/trpc';
 import { DependencyGraphForceChart } from '../components/DependencyGraphForceChart';
+
+function languageFromPath(filePath: string): string {
+  const ext = filePath.replace(/^.*\./, '').toLowerCase();
+  const map: Record<string, string> = {
+    py: 'python', js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
+    json: 'json', md: 'markdown', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css',
+    sh: 'bash', bash: 'bash', sql: 'sql',
+  };
+  return map[ext] ?? ext;
+}
+
+const codeBlockStyle = {
+  ...oneDark,
+  'code[class*="language-"]': {
+    ...(oneDark['code[class*="language-"]' as keyof typeof oneDark] as object),
+    background: 'var(--app-code-bg)',
+    color: 'var(--app-code-text)',
+    fontFamily: "'IBM Plex Mono', monospace",
+  },
+  'pre[class*="language-"]': {
+    ...(oneDark['pre[class*="language-"]' as keyof typeof oneDark] as object),
+    background: 'var(--app-code-bg)',
+    color: 'var(--app-code-text)',
+    fontFamily: "'IBM Plex Mono', monospace",
+  },
+};
 
 const CARD_STYLE: React.CSSProperties = {
   backgroundColor: 'var(--app-surface)',
@@ -135,16 +163,23 @@ export function CodeExplorerPage() {
   };
 
   const building = data?.building ?? false;
-  const buildPhase = data?.phase ?? 'parsing';
+  const buildPhase = data?.phase ?? 'discovering';
   const filesProcessed = data?.filesProcessed ?? 0;
   const totalFiles = data?.totalFiles ?? 0;
   const currentDir = data?.currentDir ?? '';
+  const directoriesScanned = (data?.directoriesScanned ?? []) as string[];
   const nodes = data?.nodes ?? [];
   const edges = data?.edges ?? [];
   const apiError = data?.error ?? null;
   const truncated = data?.truncated ?? false;
 
-  const nodePaths = useMemo(() => nodes.map((n) => n.path), [nodes]);
+  const nodePaths = useMemo(
+    () =>
+      nodes
+        .filter((n) => !(n as { id?: string }).id || (n as { id?: string }).id!.startsWith('file://'))
+        .map((n) => n.path),
+    [nodes]
+  );
   const fileTreeRoot = useMemo(() => buildFileTree(nodePaths), [nodePaths]);
   const nodePathSet = useMemo(() => new Set(nodePaths.map(normalizePathForCompare)), [nodePaths]);
 
@@ -158,16 +193,16 @@ export function CodeExplorerPage() {
     });
   }, [fileTreeRoot]);
 
-  const { outbound, inbound } = useMemo(() => {
-    if (!selectedPath) return { outbound: [], inbound: [] };
-    const norm = normalizePathForCompare(selectedPath);
-    const outboundEdges = edges.filter((e) => normalizePathForCompare(e.source) === norm);
-    const inboundEdges = edges.filter((e) => normalizePathForCompare(e.target) === norm);
-    return {
-      outbound: outboundEdges.map((e) => ({ path: e.target, type: e.type })),
-      inbound: inboundEdges.map((e) => ({ path: e.source, type: e.type })),
-    };
-  }, [selectedPath, edges]);
+  const fileDepsQuery = trpc.codebase.getFileDependencies.useQuery(
+    { path: selectedPath ?? '', graphPath: pathArg || '.' },
+    { enabled: !!selectedPath }
+  );
+  const fileContentQuery = trpc.codebase.getFileContent.useQuery(
+    { path: selectedPath ?? '' },
+    { enabled: !!selectedPath }
+  );
+  const outbound: Array<{ path: string }> = (fileDepsQuery.data?.dependsOn ?? []).map((p) => ({ path: p }));
+  const inbound: Array<{ path: string }> = (fileDepsQuery.data?.dependedOnBy ?? []).map((p) => ({ path: p }));
 
   const toggleFolder = (folderPath: string) => {
     setExpandedFolders((prev) => {
@@ -276,18 +311,39 @@ export function CodeExplorerPage() {
       {building && (
         <Card withBorder padding="md" style={CARD_STYLE}>
           <Text size="sm" fw={500} mb="xs">
-            {totalFiles > 0
-              ? `Building dependency graph… ${filesProcessed} of ${totalFiles} files processed`
-              : buildPhase === 'discovering'
-                ? `Discovering files in ${currentDir || '.'}… ${filesProcessed} found so far`
-                : 'Discovering files…'}
+            {buildPhase === 'discovering'
+              ? `Scanning ${currentDir || '.'}… ${filesProcessed} file${filesProcessed === 1 ? '' : 's'} found`
+              : buildPhase === 'parsing_defs'
+                ? `Extracting symbols… ${filesProcessed} of ${totalFiles} files`
+                : buildPhase === 'parsing_refs'
+                  ? `Resolving references… ${filesProcessed} of ${totalFiles} files`
+                  : totalFiles > 0
+                    ? `Building dependency graph… ${filesProcessed} of ${totalFiles} files`
+                    : 'Analysing…'}
           </Text>
+          {directoriesScanned.length > 0 && (
+            <Text size="xs" c="dimmed" mb="xs">
+              Directories: {directoriesScanned.slice(0, 15).join(', ')}
+              {directoriesScanned.length > 15 ? ` … +${directoriesScanned.length - 15} more` : ''}
+            </Text>
+          )}
           <Progress
-            value={totalFiles > 0 ? Math.round((filesProcessed / totalFiles) * 100) : undefined}
+            value={
+              buildPhase === 'discovering'
+                ? undefined
+                : totalFiles > 0
+                  ? Math.round((filesProcessed / totalFiles) * 100)
+                  : 0
+            }
             size="md"
             striped
-            animated={totalFiles === 0}
+            animated={buildPhase === 'discovering' || totalFiles === 0}
           />
+          {buildPhase !== 'discovering' && totalFiles > 0 && (
+            <Text size="xs" c="dimmed" mt={4}>
+              {Math.round((filesProcessed / totalFiles) * 100)}%
+            </Text>
+          )}
         </Card>
       )}
 
@@ -321,45 +377,71 @@ export function CodeExplorerPage() {
               </Card>
               <Card withBorder padding="md" style={{ ...CARD_STYLE, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 {selectedPath ? (
-                  nodePathSet.has(normalizePathForCompare(selectedPath)) ? (
-                    <Stack gap="md">
-                      <Text size="sm" fw={600} style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{selectedPath}</Text>
-                      <Box>
-                        <Text size="xs" fw={600} c="dimmed" mb="xs">Depends on</Text>
-                        {outbound.length > 0 ? (
-                          <List size="sm" spacing="xs">
-                            {outbound.map(({ path: targetPath, type }, i) => (
-                              <List.Item key={`${targetPath}-${i}`}>
-                                <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{targetPath}</Text>
-                                <Text size="xs" c="dimmed" component="span" ml="xs">({type})</Text>
-                              </List.Item>
-                            ))}
-                          </List>
-                        ) : (
-                          <Text size="sm" c="dimmed">No direct dependencies.</Text>
-                        )}
+                  <Stack gap="md" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                    <Text size="sm" fw={600} style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all', flexShrink: 0 }}>{selectedPath}</Text>
+                    {/* Source code */}
+                    <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                      {fileContentQuery.isLoading && (
+                        <Text size="sm" c="dimmed">Loading source…</Text>
+                      )}
+                      {fileContentQuery.data?.error && (
+                        <Text size="sm" c="dimmed">Could not read file: {fileContentQuery.data.error}</Text>
+                      )}
+                      {fileContentQuery.data?.content != null && (
+                        <ScrollArea style={{ flex: 1 }} type="auto" viewportProps={{ style: { maxHeight: '100%' } }}>
+                          <SyntaxHighlighter
+                            language={languageFromPath(selectedPath)}
+                            style={codeBlockStyle}
+                            customStyle={{
+                              margin: 0,
+                              padding: 12,
+                              borderRadius: 6,
+                              fontSize: '13px',
+                            }}
+                            codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
+                            showLineNumbers
+                          >
+                            {fileContentQuery.data.content}
+                          </SyntaxHighlighter>
+                        </ScrollArea>
+                      )}
+                    </Box>
+                    {/* Dependencies (only when file is in graph) */}
+                    {nodePathSet.has(normalizePathForCompare(selectedPath)) && (
+                      <Box style={{ flexShrink: 0, borderTop: '1px solid var(--app-border)', paddingTop: 12 }}>
+                        <Box mb="xs">
+                          <Text size="xs" fw={600} c="dimmed" mb={4}>Depends on</Text>
+                          {outbound.length > 0 ? (
+                            <List size="sm" spacing="xs">
+                              {outbound.map(({ path: targetPath }, i) => (
+                                <List.Item key={`${targetPath}-${i}`}>
+                                  <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{targetPath}</Text>
+                                </List.Item>
+                              ))}
+                            </List>
+                          ) : (
+                            <Text size="sm" c="dimmed">No direct dependencies.</Text>
+                          )}
+                        </Box>
+                        <Box>
+                          <Text size="xs" fw={600} c="dimmed" mb={4}>Depended on by</Text>
+                          {inbound.length > 0 ? (
+                            <List size="sm" spacing="xs">
+                              {inbound.map(({ path: sourcePath }, i) => (
+                                <List.Item key={`${sourcePath}-${i}`}>
+                                  <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{sourcePath}</Text>
+                                </List.Item>
+                              ))}
+                            </List>
+                          ) : (
+                            <Text size="sm" c="dimmed">Nothing depends on this file.</Text>
+                          )}
+                        </Box>
                       </Box>
-                      <Box>
-                        <Text size="xs" fw={600} c="dimmed" mb="xs">Depended on by</Text>
-                        {inbound.length > 0 ? (
-                          <List size="sm" spacing="xs">
-                            {inbound.map(({ path: sourcePath, type }, i) => (
-                              <List.Item key={`${sourcePath}-${i}`}>
-                                <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{sourcePath}</Text>
-                                <Text size="xs" c="dimmed" component="span" ml="xs">({type})</Text>
-                              </List.Item>
-                            ))}
-                          </List>
-                        ) : (
-                          <Text size="sm" c="dimmed">Nothing depends on this file.</Text>
-                        )}
-                      </Box>
-                    </Stack>
-                  ) : (
-                    <Text size="sm" c="dimmed">Selected file is not in the dependency graph.</Text>
-                  )
+                    )}
+                  </Stack>
                 ) : (
-                  <Text size="sm" c="dimmed">Select a file from the tree to see what it depends on and what depends on it.</Text>
+                  <Text size="sm" c="dimmed">Select a file from the tree to view its source and dependencies.</Text>
                 )}
               </Card>
             </Box>

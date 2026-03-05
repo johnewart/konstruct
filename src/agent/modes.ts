@@ -22,6 +22,7 @@ export const MODE_IDS = {
   IMPLEMENTATION: 'implementation',
   TESTING: 'testing',
   CODE_REVIEWER: 'code_reviewer',
+  CONVERT_DATA: 'convert_data',
 } as const;
 
 export type ModeId = (typeof MODE_IDS)[keyof typeof MODE_IDS];
@@ -268,6 +269,21 @@ TODOs are mandatory for traceability, progress tracking, and quality assurance. 
       'update_session_title',
       'set_status',
     ],
+  },
+  {
+    id: MODE_IDS.CONVERT_DATA,
+    name: 'Convert data',
+    description:
+      'Converts or transforms data (e.g. format conversion, extraction). No codebase or file tools—only can set the session title.',
+    systemPrompt: `You are a helpful assistant whose job is to convert or transform data. The user will provide input data and describe the desired format or transformation.
+
+## What you can do
+- Analyze the input and produce the converted/transformed output in your reply.
+- Use update_session_title once at the start to set a short title for the task (e.g. "Convert JSON to YAML").
+
+## What you cannot do
+- You have no access to the filesystem, codebase, or any other tools. You cannot read or write files, run commands, or search code. Only respond with the converted data in the chat and optionally set the session title.`,
+    toolNames: ['update_session_title'],
   },
   {
     id: MODE_IDS.CODE_REVIEWER,

@@ -21,7 +21,7 @@ import { router, publicProcedure } from '../trpc/trpc';
 import { loadGlobalConfig, saveGlobalConfig, getGitHubToken, getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import { getRemoteOriginUrl, parseGitHubRepoFromUrl, isGitRepository, parsePatchToHunks } from '../git';
 import type { GitDiffFile } from '../git';
-import { getCachedDependencyGraph } from './codebase';
+// import { getCachedDependencyGraph } from './codebase';
 import { chat } from '../../shared/llm';
 import { getAllProviders } from '../../shared/providers';
 import * as sessionStore from '../../shared/sessionStore';
@@ -328,7 +328,7 @@ export const githubRouter = router({
       const prData = await getPRContextAndFiles(ctx.projectRoot, input.pullNumber);
       if (!prData) return { building: false, error: 'Could not load PR (not a GitHub repo or missing token).' };
 
-      const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
+      const graph = undefined; 
       const inboundMap = graph
         ? inboundDepsForDiffFiles(prData.diffFiles, graph.edges)
         : new Map<string, string[]>();
