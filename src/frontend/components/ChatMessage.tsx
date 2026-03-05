@@ -17,6 +17,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Tooltip } from './Tooltip';
+import { markdownCodeComponents } from './MarkdownCodeComponents';
 import './Tooltip.css';
 import React from 'react';
 
@@ -64,7 +65,7 @@ export const ChatMessage = React.memo(function ChatMessage({
             </div>
           )
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
             {message.content || (isAssistant && toolCount > 0 ? '' : '')}
           </ReactMarkdown>
         )}

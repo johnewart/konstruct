@@ -287,7 +287,7 @@ export function DependencyGraphForceChart({ nodes, edges, pathStripPrefix, style
             border: '1px solid var(--app-border)',
             borderRadius: 6,
             fontSize: 12,
-            fontFamily: 'monospace',
+            fontFamily: "'IBM Plex Mono', monospace",
             color: 'var(--app-text)',
             maxWidth: 'calc(100% - 24px)',
             overflow: 'hidden',

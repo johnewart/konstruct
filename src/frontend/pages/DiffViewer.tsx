@@ -19,6 +19,7 @@ import { Badge, Box, Loader, List, Stack, Text, Title, Button, Group, Alert, Tab
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
+import { markdownCodeComponents } from '../components/MarkdownCodeComponents';
 import { useProjectModel } from '../contexts/ProjectModelContext';
 import { DiffViewer } from '../components/DiffViewer';
 import { ReviewAssistantPanel } from '../components/ReviewAssistantPanel';
@@ -276,7 +277,7 @@ export function DiffViewerPage() {
                   </Group>
                   {diffOverviewProgress?.entries && diffOverviewProgress.entries.length > 0 && displayThinking ? (
                     <div className="chat-thinking-stream markdown-body" role="status" style={{ fontSize: '1rem', lineHeight: 1.6, overflow: 'visible' }}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
                         {displayThinking.slice(0, visibleThinkingLength)}
                       </ReactMarkdown>
                     </div>
@@ -306,7 +307,7 @@ export function DiffViewerPage() {
                   <Title order={4} mb="sm">{overviewData.overview.title}</Title>
                   <Text size="md" mb="md" c="dimmed">{overviewData.overview.summary}</Text>
                   <Box className="markdown-body" style={{ fontSize: '1rem', lineHeight: 1.6 }}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
                       {overviewData.overview.review || overviewData.overview.summary}
                     </ReactMarkdown>
                   </Box>

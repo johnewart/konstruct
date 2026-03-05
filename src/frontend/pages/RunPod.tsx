@@ -1560,7 +1560,7 @@ export function RunPodPage() {
                               href={`https://${pod.id}-8000.proxy.runpod.net/`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{ fontFamily: 'monospace' }}
+                              style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                             >
                               https://{pod.id}-8000.proxy.runpod.net/
                             </Text>

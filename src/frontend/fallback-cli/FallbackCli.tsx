@@ -302,7 +302,7 @@ export function FallbackCli() {
           flex: 1,
           overflow: 'auto',
           padding: 12,
-          fontFamily: 'ui-monospace, monospace',
+          fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 13,
         }}
       >

@@ -18,6 +18,7 @@ import { useParams, Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
+import { markdownCodeComponents } from '../components/MarkdownCodeComponents';
 
 export function DocumentPage() {
   const { id } = useParams<{ id: string }>();
@@ -49,7 +50,7 @@ export function DocumentPage() {
         </div>
       </header>
       <div className="content markdown-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>{doc.content}</ReactMarkdown>
       </div>
       <Link to="/" className="back-link">
         ← Back to Chat

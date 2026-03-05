@@ -23,6 +23,7 @@ const CHAT_MODEL_KEY = 'chat-model-id';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
+import { markdownCodeComponents } from '../components/MarkdownCodeComponents';
 import { useProjectModel } from '../contexts/ProjectModelContext';
 import { ChatMessage } from '../components/ChatMessage';
 import {
@@ -1376,7 +1377,7 @@ export function Chat() {
                           size="xs"
                           c="dimmed"
                           style={{
-                            fontFamily: 'monospace',
+                            fontFamily: "'IBM Plex Mono', monospace",
                             fontSize: '0.7rem',
                             cursor: 'pointer',
                           }}
@@ -2063,7 +2064,7 @@ export function Chat() {
                       <p className="context-modal__loading">Loading…</p>
                     ) : planContent ? (
                       <div className="plan-modal__content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
                           {planContent}
                         </ReactMarkdown>
                       </div>

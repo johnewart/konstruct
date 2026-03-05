@@ -176,8 +176,8 @@ export async function runSdkQuery(
     abortController,
     pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
     mcpServers: options.mcpServers,
-    /** Disable Claude Code built-in tools everywhere; use only MCP tools when mcpServers is set. */
-    tools: [] as string[],
+    /** Allow only WebFetch and WebSearch; all other built-in tools (Read, Edit, Bash, etc.) are disabled. Konstruct MCP tools are unchanged. */
+    tools: ['WebFetch', 'WebSearch'],
     /** Emit partial assistant messages so we can stream status to the UI. */
     ...(useProgress ? { includePartialMessages: true } : {}),
     ...(options.bypassPermissions
