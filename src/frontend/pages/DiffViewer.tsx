@@ -15,7 +15,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Badge, Box, Loader, List, Stack, Text, Title, Button, Group, Alert, Tabs, Progress } from '@mantine/core';
+import { Badge, Box, Card, Loader, List, Stack, Text, Title, Button, Group, Alert, Tabs, Progress, ActionIcon } from '@mantine/core';
+import { IconMessageCircle, IconChevronDown } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '../../client/trpc';
@@ -77,6 +78,7 @@ const STREAMING_TICK_MS = 28;
 export function DiffViewerPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
+  const [reviewChatOpen, setReviewChatOpen] = useState(false);
   const [frozenThinkingText, setFrozenThinkingText] = useState<string | null>(null);
   const [visibleThinkingLength, setVisibleThinkingLength] = useState(0);
   const { providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
@@ -140,7 +142,6 @@ export function DiffViewerPage() {
   useEffect(() => {
     if (!overviewData?.building || !thinkingBeforeJson?.jsonStarted) return;
     setFrozenThinkingText((prev) => (prev !== null ? prev : thinkingBeforeJson.text));
-    setVisibleThinkingLength((prev) => Math.max(prev, thinkingBeforeJson.text.length));
   }, [overviewData?.building, thinkingBeforeJson?.text, thinkingBeforeJson?.jsonStarted]);
 
   const displayThinking =
@@ -203,7 +204,7 @@ export function DiffViewerPage() {
       <Box
         style={{
           ...CARD_STYLE,
-          flex: 3,
+          flex: 1,
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
@@ -302,90 +303,117 @@ export function DiffViewerPage() {
                 ) : null}
               </Box>
             ) : overviewData?.overview ? (
-              <Box p="md" style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                <Box style={{ flex: 1.5, minWidth: 0, overflow: 'auto' }}>
-                  <Title order={4} mb="sm">{overviewData.overview.title}</Title>
-                  <Text size="md" mb="md" c="dimmed">{overviewData.overview.summary}</Text>
-                  <Box className="markdown-body" style={{ fontSize: '1rem', lineHeight: 1.6 }}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
-                      {overviewData.overview.review || overviewData.overview.summary}
-                    </ReactMarkdown>
+              <Box p="md" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <Box style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <Card withBorder p="md" style={{ flex: '1.5', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', backgroundColor: 'var(--app-surface)' }}>
+                    <Text size="sm" fw={600} mb="xs" c="dimmed">Summary</Text>
+                    <Title order={4} mt={0} mb="xs">{overviewData.overview.title}</Title>
+                    <Text size="md" mb="sm" c="dimmed">{overviewData.overview.summary}</Text>
+                    <Box className="markdown-body" style={{ fontSize: '1rem', lineHeight: 1.6, flex: 1, minHeight: 0, overflow: 'auto' }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                        {overviewData.overview.review || overviewData.overview.summary}
+                      </ReactMarkdown>
+                    </Box>
+                  </Card>
+                  <Box style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0, overflow: 'hidden' }}>
+                    <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
+                      <Text size="sm" fw={600} mb="sm">Confidence</Text>
+                      {overviewData.overview.confidence && (['quality', 'testCoverage', 'security'] as const).map((key) => {
+                        const dim = overviewData.overview!.confidence[key];
+                        const label = key === 'testCoverage' ? 'Test coverage' : key.charAt(0).toUpperCase() + key.slice(1);
+                        return (
+                          <Box key={key} mb={key !== 'security' ? 'sm' : 0}>
+                            <Group justify="space-between" mb={4}>
+                              <Text size="sm" fw={500}>{label}</Text>
+                              <Text size="sm" c="dimmed">{dim.score}%</Text>
+                            </Group>
+                            <Progress value={dim.score} size="sm" color={dim.score >= 70 ? 'green' : dim.score >= 40 ? 'yellow' : 'red'} mb={4} />
+                            <Text size="xs" c="dimmed" mb={2}>{dim.explanation}</Text>
+                            {dim.evidence ? (
+                              <Text size="xs" c="dimmed" style={{ fontStyle: 'italic' }}>Evidence: {dim.evidence}</Text>
+                            ) : null}
+                          </Box>
+                        );
+                      })}
+                    </Card>
+                    <Card withBorder p="md" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'var(--app-surface)' }}>
+                      <Text size="sm" fw={600} mb="sm">Files</Text>
+                      <Box style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                        <Stack gap="md">
+                          {overviewData.overview.keyFiles.length > 0 && (
+                            <Stack gap="xs">
+                              <Text size="xs" fw={500} c="dimmed">Key files (staged)</Text>
+                              <List size="sm" spacing="xs">
+                                {overviewData.overview.keyFiles.map((k) => (
+                                  <List.Item key={k.path}>
+                                    <LevelBadge level={normalizeLevel(k.dangerLevel)} />
+                                    <Text component="span" size="sm" ml="xs">{k.path}</Text>
+                                    {k.reason && <Text size="xs" c="dimmed" ml="xs">{k.reason}</Text>}
+                                  </List.Item>
+                                ))}
+                              </List>
+                            </Stack>
+                          )}
+                          {overviewData.overview.filesNotStaged && overviewData.overview.filesNotStaged.length > 0 && (
+                            <Stack gap="xs">
+                              <Text size="xs" fw={500} c="dimmed">Not staged</Text>
+                              <Stack gap="xs">
+                                {overviewData.overview.filesNotStaged.map((f) => (
+                                  <Box key={f.path}>
+                                    <Text size="sm" component="span" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>{f.path}</Text>
+                                    {f.potentiallyMissingFromStaged && (
+                                      <Text size="xs" c="orange" ml="xs" component="span">(consider staging)</Text>
+                                    )}
+                                    {f.description ? (
+                                      <Text size="xs" c="dimmed" display="block" mt={2}>{f.description}</Text>
+                                    ) : null}
+                                  </Box>
+                                ))}
+                              </Stack>
+                            </Stack>
+                          )}
+                          {overviewData.overview.keyFiles.length === 0 && (!overviewData.overview.filesNotStaged || overviewData.overview.filesNotStaged.length === 0) && (
+                            <Text size="sm" c="dimmed">No files listed.</Text>
+                          )}
+                        </Stack>
+                      </Box>
+                    </Card>
                   </Box>
                 </Box>
-                <Box style={{ flex: 1, minWidth: 280, overflow: 'auto', borderLeft: '1px solid var(--app-border)', paddingLeft: 20 }}>
-                  <Stack gap="md">
-                    {overviewData.overview.confidence && (
-                      <Stack gap="sm">
-                        <Text size="lg" fw={600}>Confidence</Text>
-                        {(['quality', 'testCoverage', 'security'] as const).map((key) => {
-                          const dim = overviewData!.overview!.confidence[key];
-                          const label = key === 'testCoverage' ? 'Test coverage' : key.charAt(0).toUpperCase() + key.slice(1);
-                          return (
-                            <Box key={key}>
-                              <Group justify="space-between" mb={4}>
-                                <Text size="sm" fw={500}>{label}</Text>
-                                <Text size="sm" c="dimmed">{dim.score}%</Text>
-                              </Group>
-                              <Progress value={dim.score} size="sm" color={dim.score >= 70 ? 'green' : dim.score >= 40 ? 'yellow' : 'red'} mb={4} />
-                              <Text size="xs" c="dimmed" mb={2}>{dim.explanation}</Text>
-                              {dim.evidence ? (
-                                <Text size="xs" c="dimmed" style={{ fontStyle: 'italic' }}>Evidence: {dim.evidence}</Text>
-                              ) : null}
-                            </Box>
-                          );
-                        })}
-                      </Stack>
-                    )}
-                    {overviewData.overview.keyFiles.length > 0 && (
-                      <Stack gap="xs">
-                        <Text size="lg" fw={600}>Key files</Text>
-                        <List size="lg" spacing="xs">
-                          {overviewData.overview.keyFiles.map((k) => (
-                            <List.Item key={k.path}>
-                              <LevelBadge level={normalizeLevel(k.dangerLevel)} />
-                              <Text component="span" size="lg" ml="xs">{k.path}</Text>
-                              {k.reason && <Text size="md" c="dimmed" ml="xs">{k.reason}</Text>}
-                            </List.Item>
-                          ))}
-                        </List>
-                      </Stack>
-                    )}
-                    {overviewData.overview.actionItems.length > 0 && (
-                      <Stack gap="xs">
-                        <Text size="lg" fw={600}>Things to look for</Text>
-                        <List size="lg" spacing="xs">
-                          {overviewData.overview.actionItems.map((item, i) => (
-                            <List.Item key={i}>
-                              <LevelBadge level={item.level} />
-                              <Text component="span" size="md" ml="xs">{item.text}</Text>
-                              {item.files?.length ? (
-                                <Text size="xs" c="dimmed" ml="xs" component="span">({item.files.join(', ')})</Text>
-                              ) : null}
-                            </List.Item>
-                          ))}
-                        </List>
-                      </Stack>
-                    )}
-                    {reviewChatSession?.suggestedImprovements?.length ? (
-                      <Stack gap="xs">
-                        <Text size="lg" fw={600}>Suggested improvements (from chat)</Text>
-                        <Stack gap="sm">
-                          {reviewChatSession.suggestedImprovements.map((imp, i) => (
-                            <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-surface)' }}>
-                              <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
-                                {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
-                              </Text>
-                              <Text size="sm" mt={4}>{imp.suggestion}</Text>
-                              {imp.snippet ? (
-                                <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-bg)', borderRadius: 4 }}>{imp.snippet}</Box>
-                              ) : null}
-                            </Box>
-                          ))}
-                        </Stack>
-                      </Stack>
-                    ) : null}
-                  </Stack>
-                </Box>
+                {overviewData.overview.actionItems.length > 0 && (
+                  <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
+                    <Text size="sm" fw={600} mb="xs">Things to look for</Text>
+                    <List size="sm" spacing="xs">
+                      {overviewData.overview.actionItems.map((item, i) => (
+                        <List.Item key={i}>
+                          <LevelBadge level={item.level} />
+                          <Text component="span" size="sm" ml="xs">{item.text}</Text>
+                          {item.files?.length ? (
+                            <Text size="xs" c="dimmed" ml="xs" component="span">({item.files.join(', ')})</Text>
+                          ) : null}
+                        </List.Item>
+                      ))}
+                    </List>
+                  </Card>
+                )}
+                {reviewChatSession?.suggestedImprovements?.length ? (
+                  <Card withBorder p="md" style={{ flexShrink: 0, backgroundColor: 'var(--app-surface)' }}>
+                    <Text size="sm" fw={600} mb="xs">Suggested improvements (from chat)</Text>
+                    <Stack gap="xs">
+                      {reviewChatSession.suggestedImprovements.map((imp, i) => (
+                        <Box key={i} p="xs" style={{ border: '1px solid var(--app-border)', borderRadius: 6, backgroundColor: 'var(--app-bg)' }}>
+                          <Text size="sm" component="div" style={{ fontFamily: 'var(--mono-font)', wordBreak: 'break-all' }}>
+                            {imp.filePath}{imp.lineNumber != null ? `:${imp.lineNumber}` : ''}
+                          </Text>
+                          <Text size="sm" mt={4}>{imp.suggestion}</Text>
+                          {imp.snippet ? (
+                            <Box component="pre" mt="xs" p="xs" style={{ fontSize: '0.75rem', overflow: 'auto', backgroundColor: 'var(--app-bg)', borderRadius: 4 }}>{imp.snippet}</Box>
+                          ) : null}
+                        </Box>
+                      ))}
+                    </Stack>
+                  </Card>
+                ) : null}
               </Box>
             ) : reviewChatSession?.suggestedImprovements?.length ? (
               <Box p="md">
@@ -456,18 +484,57 @@ export function DiffViewerPage() {
         </Tabs>
       </Box>
 
-      {/* Bottom panel: Assistant chat (~25%) */}
-      <Box
+      {/* Floating chat button */}
+      <ActionIcon
+        size={56}
+        radius="xl"
+        variant="filled"
+        color="blue"
+        aria-label={reviewChatOpen ? 'Close chat' : 'Chat about this review'}
         style={{
-          ...CARD_STYLE,
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
+          position: 'fixed',
+          bottom: 24,
+          right: 24,
+          zIndex: 1001,
+          boxShadow: '0 4px 12px var(--app-shadow)',
         }}
+        onClick={() => setReviewChatOpen((open) => !open)}
       >
-        <ReviewAssistantPanel sessionId={reviewChatSessionId} />
-      </Box>
+        <IconMessageCircle size={28} />
+      </ActionIcon>
+
+      {/* Floating chat window at bottom */}
+      {reviewChatOpen && (
+        <Box
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '66.67%',
+            maxWidth: 900,
+            height: '35vh',
+            minHeight: 280,
+            maxHeight: 480,
+            zIndex: 1000,
+            ...CARD_STYLE,
+            borderRadius: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <Group justify="space-between" wrap="nowrap" style={{ padding: '10px 14px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+            <Text size="sm" fw={600}>Chat about this review</Text>
+            <ActionIcon variant="subtle" size="sm" aria-label="Minimize" onClick={() => setReviewChatOpen(false)}>
+              <IconChevronDown size={18} />
+            </ActionIcon>
+          </Group>
+          <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <ReviewAssistantPanel sessionId={reviewChatSessionId} />
+          </Box>
+        </Box>
+      )}
     </Box>
   );
 }

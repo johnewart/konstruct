@@ -31,8 +31,9 @@ import {
   Group,
   Anchor,
   TextInput,
+  ActionIcon,
 } from '@mantine/core';
-import { IconExternalLink } from '@tabler/icons-react';
+import { IconExternalLink, IconMessageCircle, IconChevronDown } from '@tabler/icons-react';
 import { trpc } from '../../client/trpc';
 import { useProjectModel } from '../contexts/ProjectModelContext';
 import { DiffViewer } from '../components/DiffViewer';
@@ -95,6 +96,7 @@ export function PullRequestsPage() {
   const [selectedPr, setSelectedPr] = useState<PRItem | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
+  const [reviewChatOpen, setReviewChatOpen] = useState(false);
   const [prFilter, setPrFilter] = useState('');
 
   const { data: githubRepo, isLoading: repoLoading } = trpc.github.getRepo.useQuery();
@@ -381,11 +383,11 @@ export function PullRequestsPage() {
           </Box>
         ) : (
           <>
-            {/* Top: PR tabs (Overview | Diff) */}
+            {/* PR tabs (Overview | Diff) */}
             <Box
               style={{
                 ...CARD_STYLE,
-                flex: 3,
+                flex: 1,
                 minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
@@ -494,21 +496,60 @@ export function PullRequestsPage() {
               </Tabs>
             </Box>
 
-            {/* Bottom: chat */}
-            <Box
+            {/* Floating chat button */}
+            <ActionIcon
+              size={56}
+              radius="xl"
+              variant="filled"
+              color="blue"
+              aria-label={reviewChatOpen ? 'Close chat' : 'Chat about this review'}
               style={{
-                ...CARD_STYLE,
-                flex: 1.5,
-                minHeight: 0,
-                display: 'flex',
-                flexDirection: 'column',
+                position: 'fixed',
+                bottom: 24,
+                right: 24,
+                zIndex: 1001,
+                boxShadow: '0 4px 12px var(--app-shadow)',
               }}
+              onClick={() => setReviewChatOpen((open) => !open)}
             >
-              <ReviewAssistantPanel
-                sessionId={reviewChatSessionId}
-                prContext={selectedPr ? { pullNumber: selectedPr.number } : undefined}
-              />
-            </Box>
+              <IconMessageCircle size={28} />
+            </ActionIcon>
+
+            {/* Floating chat window at bottom */}
+            {reviewChatOpen && (
+              <Box
+                style={{
+                  position: 'fixed',
+                  bottom: 24,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: '66.67%',
+                  maxWidth: 900,
+                  height: '35vh',
+                  minHeight: 280,
+                  maxHeight: 480,
+                  zIndex: 1000,
+                  ...CARD_STYLE,
+                  borderRadius: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
+              >
+                <Group justify="space-between" wrap="nowrap" style={{ padding: '10px 14px', borderBottom: '1px solid var(--app-border)', flexShrink: 0 }}>
+                  <Text size="sm" fw={600}>Chat about this review</Text>
+                  <ActionIcon variant="subtle" size="sm" aria-label="Minimize" onClick={() => setReviewChatOpen(false)}>
+                    <IconChevronDown size={18} />
+                  </ActionIcon>
+                </Group>
+                <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <ReviewAssistantPanel
+                    sessionId={reviewChatSessionId}
+                    prContext={selectedPr ? { pullNumber: selectedPr.number } : undefined}
+                  />
+                </Box>
+              </Box>
+            )}
           </>
         )}
       </Box>

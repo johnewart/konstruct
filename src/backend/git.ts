@@ -233,6 +233,38 @@ export function getChangedFiles(repoPath: string): GitFileChange[] {
 }
 
 /**
+ * Paths that have staged changes (index; queued for commit).
+ * Used so diff review can treat staged vs unstaged separately.
+ */
+export function getStagedFilePaths(repoPath: string): string[] {
+  const actualRepoPath = getGitRepoPath(repoPath);
+  if (!actualRepoPath) return [];
+  try {
+    const statusOutput = execSync('git status --porcelain=v1', {
+      cwd: actualRepoPath,
+      encoding: 'utf-8',
+    });
+    const paths: string[] = [];
+    for (const line of statusOutput.split('\n')) {
+      if (!line.trim()) continue;
+      if (line.startsWith('??')) continue;
+      if (line.length < 3) continue;
+      const firstChar = line[0];
+      if (firstChar === ' ') continue;
+      let filePath = line.substring(2).trim();
+      if (firstChar === 'R' && filePath.includes(' -> ')) {
+        const parts = filePath.split(' -> ');
+        filePath = parts.length === 2 ? parts[1].trim() : filePath;
+      }
+      paths.push(filePath.replace(/\\/g, '/'));
+    }
+    return paths;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Get the diff stats for a specific file
  */
 export function getDiffStats(repoPath: string, filePath: string): {

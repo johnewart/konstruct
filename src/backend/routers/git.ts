@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff } from '../git';
+import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff, getStagedFilePaths } from '../git';
 import type { GitDiffFile } from '../git';
 import { getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import * as sessionStore from '../../shared/sessionStore';
@@ -48,6 +48,8 @@ export interface DiffOverviewResult {
   };
   keyFiles: Array<{ path: string; dangerLevel: string; reason?: string }>;
   actionItems: Array<{ text: string; level: 'high' | 'medium' | 'low'; files?: string[] }>;
+  /** Files that appear in the diff but are not staged; optionally flag if they might should be staged. */
+  filesNotStaged?: Array<{ path: string; description: string; potentiallyMissingFromStaged?: boolean }>;
 }
 
 const DIFF_OVERVIEW_CACHE_FILE = 'diff-overview.json';
@@ -105,6 +107,20 @@ function normalizeDiffActionItem(raw: unknown): DiffOverviewResult['actionItems'
   return { text: String(raw), level: 'medium', files: [] };
 }
 
+function normalizeFilesNotStaged(raw: unknown): DiffOverviewResult['filesNotStaged'] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => item != null && typeof item === 'object' && typeof (item as { path?: unknown }).path === 'string')
+    .map((item) => {
+      const o = item as { path: string; description?: string; potentiallyMissingFromStaged?: boolean };
+      return {
+        path: String(o.path),
+        description: typeof o.description === 'string' ? o.description : '',
+        potentiallyMissingFromStaged: o.potentiallyMissingFromStaged === true,
+      };
+    });
+}
+
 function readDiffOverviewFromCache(projectId: string): DiffOverviewResult | null {
   try {
     const filePath = getDiffOverviewCachePath(projectId);
@@ -119,6 +135,7 @@ function readDiffOverviewFromCache(projectId: string): DiffOverviewResult | null
         }))
       : [];
     const actionItems = Array.isArray(data.actionItems) ? data.actionItems.map(normalizeDiffActionItem) : [];
+    const filesNotStaged = normalizeFilesNotStaged(data.filesNotStaged);
     const confidence = normalizeConfidence(data.confidence);
     return {
       title: (data.title as string) ?? '',
@@ -127,6 +144,7 @@ function readDiffOverviewFromCache(projectId: string): DiffOverviewResult | null
       confidence,
       keyFiles,
       actionItems,
+      filesNotStaged,
     };
   } catch {
     return null;
@@ -285,6 +303,9 @@ export const gitRouter = router({
         const progressId = `diff-overview:${projectId}`;
         if (diffOverviewBuilding.has(key)) return { building: true, progressId };
 
+        const stagedPaths = getStagedFilePaths(ctx.projectRoot);
+        const stagedSet = new Set(stagedPaths);
+
         const graph = getCachedDependencyGraph(ctx.projectRoot, '.');
         const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
         const inboundMap = graph ? inboundDepsForDiffFiles(diffFileList, graph.edges) : new Map<string, string[]>();
@@ -323,24 +344,29 @@ export const gitRouter = router({
                 confidence: DEFAULT_CONFIDENCE,
                 keyFiles: [],
                 actionItems: [],
+                filesNotStaged: [],
               });
               return;
             }
           const systemPrompt = `You are a diff overview and code review assistant.
 
+The user cares about changes that are STAGED (queued for commit). Only staged files should influence the overall review, confidence score, and "keyFiles" list. Ignore or treat separately any file that is changed in the working tree but NOT staged.
+
 Provide a running commentary as you analyze. The user sees this commentary in real time under an "Analyzing" spinner, so emit many short updates as you go—for example: which files or sections you're looking at first, what you're considering next (risk areas, patterns, tests), key observations, and so on. Write in plain language. The more frequent and concrete your updates, the better; the user is waiting and wants to see progress. After your commentary, output the final result as a single JSON object only (no markdown, no code fence). The JSON must have these keys:
 - "title" (short code-based title)
-- "summary" (1–2 sentence code-based summary of changes)
-- "review" (a detailed analytical code review: 2–4 paragraphs covering what changed, design/architecture impact, potential risks, and notable patterns or improvements; use clear paragraphs and be specific about files and behavior)
-- "confidence" (object with three dimensions; each dimension must have "score" (0–100), "explanation" (why this score in 1–3 sentences), and "evidence" (specific references from the diff: file paths, line numbers, or code snippets that support the score)):
+- "summary" (1–2 sentence code-based summary of changes; focus on staged changes)
+- "review" (a detailed analytical code review: 2–4 paragraphs covering what changed, design/architecture impact, potential risks, and notable patterns or improvements; focus on staged files; use clear paragraphs and be specific about files and behavior)
+- "confidence" (object with three dimensions; each dimension must have "score" (0–100), "explanation" (why this score in 1–3 sentences), and "evidence" (specific references from the diff: file paths, line numbers, or code snippets that support the score)); base scores only on STAGED files:
   - "quality": code quality, maintainability, clarity, patterns
   - "testCoverage": presence and adequacy of tests in or affected by the diff; use 0 if no test changes
   - "security": security implications (input handling, auth, sensitive data, dependencies)
-- "keyFiles" (array of { "path", "dangerLevel", "reason" }; dangerLevel one of: high, medium, low)
+- "keyFiles" (array of { "path", "dangerLevel", "reason" }; dangerLevel one of: high, medium, low). Include ONLY paths that are in the STAGED list. Do not list unstaged or untracked files here.
 - "actionItems" (array of { "text", "level": "high"|"medium"|"low", "files": string[] })
+- "filesNotStaged" (array of { "path", "description", "potentiallyMissingFromStaged" }). List every file that appears in the diff or that you consider relevant but is NOT in the staged list. For each: "path" (file path), "description" (short note, e.g. "Redis dump; not staged", "Generated artifact"), and "potentiallyMissingFromStaged" (true only if you think this file should likely be staged for this commit; false for build artifacts, dumps, local config, etc.).
 
-Provide the analytical "review", the "confidence" breakdown with evidence for each dimension, and the structured keyFiles/actionItems.`;
-          const userContent = `## Local diff\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nEmit a running commentary as you analyze (many short updates: what you're looking at, considering, noticing). Then output the single JSON object with the required keys.`;
+Provide the analytical "review", the "confidence" breakdown with evidence for each dimension, the structured keyFiles/actionItems, and filesNotStaged.`;
+          const stagedList = stagedPaths.length > 0 ? stagedPaths.join('\n') : '(none)';
+          const userContent = `## Staged files (queued for commit) – use ONLY these for keyFiles and overall score\n${stagedList}\n\n## Local diff (may include unstaged changes)\n\n${contextText}\n\n## Inbound dependencies (files that depend on each changed file)\n${inboundSection}\n\nEmit a running commentary as you analyze (many short updates: what you're looking at, considering, noticing). Then output the single JSON object with the required keys, including filesNotStaged for any changed file not in the staged list.`;
           const res = await chat(
             [
               { role: 'system', content: systemPrompt },
@@ -384,20 +410,22 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
               }
             }
           }
+          const rawKeyFiles = Array.isArray(parsed.keyFiles)
+            ? parsed.keyFiles.map((k: { path?: string; dangerLevel?: string; reason?: string }) => ({
+                path: String(k?.path ?? '').replace(/\\/g, '/').trim(),
+                dangerLevel: String(k?.dangerLevel ?? ''),
+                reason: k?.reason != null ? String(k.reason) : undefined,
+              }))
+            : [];
           const overview: DiffOverviewResult = parsed
             ? {
                 title: String(parsed.title ?? ''),
                 summary: String(parsed.summary ?? ''),
                 review: String(parsed.review ?? ''),
                 confidence: normalizeConfidence(parsed.confidence),
-                keyFiles: Array.isArray(parsed.keyFiles)
-                  ? parsed.keyFiles.map((k: { path?: string; dangerLevel?: string; reason?: string }) => ({
-                      path: String(k?.path ?? ''),
-                      dangerLevel: String(k?.dangerLevel ?? ''),
-                      reason: k?.reason != null ? String(k.reason) : undefined,
-                    }))
-                  : [],
+                keyFiles: rawKeyFiles.filter((k) => stagedSet.has(k.path)),
                 actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems.map(normalizeDiffActionItem) : [],
+                filesNotStaged: normalizeFilesNotStaged(parsed.filesNotStaged),
               }
             : {
                 title: 'Overview',
@@ -406,6 +434,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
                 confidence: DEFAULT_CONFIDENCE,
                 keyFiles: [],
                 actionItems: [],
+                filesNotStaged: [],
               };
           diffOverviewCache.set(key, overview);
           writeDiffOverviewToCache(projectId, overview);
@@ -418,6 +447,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
             confidence: DEFAULT_CONFIDENCE,
             keyFiles: [],
             actionItems: [],
+            filesNotStaged: [],
           });
         } finally {
           runProgressStore.clearProgress(progressId);
