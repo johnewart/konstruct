@@ -535,9 +535,7 @@ export function UnifiedChatPanel({
                           <span className="chat-tool-status__text">
                             {entry.type === 'status'
                               ? entry.description
-                              : entry.description
-                                ? `${entry.toolName ?? 'tool'}(${entry.description})`
-                                : (entry.toolName ?? 'tool')}
+                              : entry.description ?? (entry.toolName?.replace(/^mcp__konstruct__/, '') ?? 'tool')}
                           </span>
                         </div>
                       ))}

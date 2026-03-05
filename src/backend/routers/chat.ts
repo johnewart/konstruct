@@ -30,6 +30,9 @@ const PLANS_DIR = '.konstruct/plans';
 const RULES_DIR = '.konstruct/rules';
 const AGENT_WORKER_URL = process.env.AGENT_WORKER_URL;
 
+/** When running the agent in-process (no worker), allow cancel to abort the run. */
+const inProcessAbortControllers = new Map<string, AbortController>();
+
 function isSafeRuleName(name: string): boolean {
   return (
     name.length > 0 &&
@@ -286,6 +289,12 @@ export const chatRouter = router({
           return { ok: false };
         }
       }
+      const controller = inProcessAbortControllers.get(input.sessionId);
+      if (controller) {
+        controller.abort();
+        inProcessAbortControllers.delete(input.sessionId);
+        return { ok: true };
+      }
       return { ok: false };
     }),
 
@@ -341,21 +350,27 @@ export const chatRouter = router({
         return session;
       }
 
-      const session = await runAgentLoop({
-        projectRoot: ctx.projectRoot,
-        sessionId: input.sessionId,
-        content: input.content,
-        modeId: input.modeId,
-        providerId: effectiveProviderId,
-        model: effectiveModelId,
-        progressStore: runProgressStore,
-        ...(prContextText ? { prContextText } : {}),
-      });
-      // Notify WebSocket subscribers so the UI refetches session (same as worker path)
-      agentStream.broadcastToSession(
-        input.sessionId,
-        JSON.stringify({ sessionId: input.sessionId, done: true })
-      );
-      return session;
+      const controller = new AbortController();
+      inProcessAbortControllers.set(input.sessionId, controller);
+      try {
+        const session = await runAgentLoop({
+          projectRoot: ctx.projectRoot,
+          sessionId: input.sessionId,
+          content: input.content,
+          modeId: input.modeId,
+          providerId: effectiveProviderId,
+          model: effectiveModelId,
+          progressStore: runProgressStore,
+          signal: controller.signal,
+          ...(prContextText ? { prContextText } : {}),
+        });
+        agentStream.broadcastToSession(
+          input.sessionId,
+          JSON.stringify({ sessionId: input.sessionId, done: true })
+        );
+        return session;
+      } finally {
+        inProcessAbortControllers.delete(input.sessionId);
+      }
     }),
 });

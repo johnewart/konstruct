@@ -26,6 +26,7 @@ import { getMode } from './modes';
 import { getModeInstructions } from '../shared/config';
 import { createLogger } from '../shared/logger';
 import { analyzeConversationPattern } from './supervisor';
+import { SdkAbortWithHistoryError, type ToolCallHistoryEntry } from './claude-sdk-agent';
 
 const log = createLogger('agent');
 
@@ -57,6 +58,43 @@ export function getCombinedRules(projectRoot: string): string {
   return (
     '---\nProject rules (from .konstruct/rules/):\n\n' + parts.join('\n\n')
   );
+}
+
+const MAX_TOOL_RESULT_CHARS = 28 * 1024;
+
+/** Persist MCP tool call history to the session transcript (used incrementally and on SDK abort). */
+function persistMcpToolHistory(
+  sessionId: string,
+  baseMessages: sessionStore.ChatMessage[],
+  toolCallHistory: ToolCallHistoryEntry[],
+  finalAssistantContent?: string
+): void {
+  if (toolCallHistory.length === 0) return;
+  const assistantMsg: sessionStore.ChatMessage = {
+    role: 'assistant',
+    content: finalAssistantContent ?? ' ',
+    toolCalls: toolCallHistory.map((th) => ({
+      id: th.id,
+      type: 'function',
+      function: { name: th.name, arguments: th.arguments },
+    })),
+  };
+  const toolMsgs: sessionStore.ChatMessage[] = toolCallHistory.map((th) => {
+    let content = th.result;
+    if (content.length > MAX_TOOL_RESULT_CHARS) {
+      content =
+        content.slice(0, MAX_TOOL_RESULT_CHARS) +
+        '\n\n(truncated; output exceeded ' +
+        MAX_TOOL_RESULT_CHARS +
+        ' chars)';
+    }
+    return { role: 'tool' as const, content, toolCallId: th.id };
+  });
+  sessionStore.updateSessionMessages(sessionId, [
+    ...baseMessages,
+    assistantMsg,
+    ...toolMsgs,
+  ]);
 }
 
 export interface RunProgressStore {
@@ -167,16 +205,35 @@ export async function runAgentLoop(
     while (iteration < maxIterations) {
       if (signal?.aborted) break;
       iteration++;
-      const response = await llm.chat(messages, {
-        tools,
-        providerId,
-        model,
-        projectRoot,
-        signal,
-        sessionId,
-        progressStore,
-      });
-      
+      let response: Awaited<ReturnType<typeof llm.chat>>;
+      try {
+        response = await llm.chat(messages, {
+          tools,
+          providerId,
+          model,
+          projectRoot,
+          signal,
+          sessionId,
+          progressStore,
+          onMcpToolComplete: (toolCallHistory) => {
+            persistMcpToolHistory(
+              sessionId,
+              messages.filter((m) => m.role !== 'system') as sessionStore.ChatMessage[],
+              toolCallHistory
+            );
+          },
+        });
+      } catch (err) {
+        if (SdkAbortWithHistoryError.is(err) && err.toolCallHistory.length > 0) {
+          persistMcpToolHistory(
+            sessionId,
+            messages.filter((m) => m.role !== 'system') as sessionStore.ChatMessage[],
+            err.toolCallHistory
+          );
+        }
+        throw err;
+      }
+
       // Fire-and-forget supervisor check every 10-15 turns
       // DISABLED - causing cache invalidation issues when injecting comments
       if (false && messages.length % 15 === 0) {
@@ -255,6 +312,13 @@ export async function runAgentLoop(
           content: response.content || ' ',
           toolCalls: response.toolCalls,
         });
+        // Persist assistant's tool decisions immediately so transcript/context is up to date
+        sessionStore.updateSessionMessages(
+          sessionId,
+          messages.filter(
+            (m) => m.role !== 'system'
+          ) as sessionStore.ChatMessage[]
+        );
         for (const tc of response.toolCalls) {
           if (signal?.aborted) break;
           const toolName = tc.function.name;
@@ -306,13 +370,14 @@ export async function runAgentLoop(
             content: resultContent,
             toolCallId: tc.id,
           });
+          // Persist each tool result immediately so transcript has full context if run is interrupted
+          sessionStore.updateSessionMessages(
+            sessionId,
+            messages.filter(
+              (m) => m.role !== 'system'
+            ) as sessionStore.ChatMessage[]
+          );
         }
-        sessionStore.updateSessionMessages(
-          sessionId,
-          messages.filter(
-            (m) => m.role !== 'system'
-          ) as sessionStore.ChatMessage[]
-        );
         if (signal?.aborted) break;
         continue;
       }

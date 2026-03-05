@@ -120,6 +120,10 @@ export async function chat(
     sessionId?: string;
     /** When set with sessionId, MCP tool use (claude_sdk) is pushed here for the UI. */
     progressStore?: McpProgressStore;
+    /** SDK request timeout in ms. 0 = no timeout. Override via KONSTRUCT_SDK_TIMEOUT_MS env. */
+    timeoutMs?: number;
+    /** Called after each MCP tool result so the run loop can persist to the transcript immediately. */
+    onMcpToolComplete?: (toolCallHistory: Array<{ id: string; name: string; arguments: string; result: string }>) => void;
   }
 ): Promise<{
   content: string;
@@ -185,17 +189,23 @@ export async function chat(
             },
           }
         : {};
+    const sdkTimeoutMs =
+      options?.timeoutMs ??
+      (typeof process !== 'undefined' && process.env.KONSTRUCT_SDK_TIMEOUT_MS
+        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
+        : 0);
     const { result, toolCallHistory } = await runSdkQuery(prompt, {
       cwd,
       model,
       env,
       signal: options?.signal,
       pathToClaudeCodeExecutable: sdkPath,
-      timeoutMs: 300_000,
+      timeoutMs: Number.isNaN(sdkTimeoutMs) ? 0 : sdkTimeoutMs,
       mcpServers: Object.keys(mcpServers).length ? mcpServers : undefined,
       bypassPermissions: Object.keys(mcpServers).length > 0,
       sessionId: options?.sessionId,
       progressStore: options?.progressStore,
+      onMcpToolComplete: options?.onMcpToolComplete,
     });
     const sdkRes = { content: result, toolCalls: undefined, toolCallHistory };
     debugLlmLogResponse(sdkRes);

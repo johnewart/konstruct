@@ -104,11 +104,13 @@ export function CodeExplorerPage() {
   );
   const didRefetchAt100Ref = useRef(false);
   useEffect(() => {
-    if (!data?.building || !data?.totalFiles || data.totalFiles === 0) {
+    if (!data?.building) {
       didRefetchAt100Ref.current = false;
       return;
     }
-    if (data.filesProcessed >= data.totalFiles) {
+    const total = data.totalFiles ?? 0;
+    const done = data.filesProcessed ?? 0;
+    if (total > 0 && done >= total) {
       if (didRefetchAt100Ref.current) return;
       didRefetchAt100Ref.current = true;
       const t1 = setTimeout(() => refetch(), 100);
@@ -117,6 +119,9 @@ export function CodeExplorerPage() {
         clearTimeout(t1);
         clearTimeout(t2);
       };
+    }
+    if (total === 0 && done === 0) {
+      refetch();
     }
     didRefetchAt100Ref.current = false;
   }, [data?.building, data?.filesProcessed, data?.totalFiles, refetch]);

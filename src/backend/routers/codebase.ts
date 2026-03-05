@@ -25,10 +25,10 @@ import { getGitRepoPath } from '../git';
 /** Higher limits for background full-graph build (Code Explorer). */
 const CODE_EXPLORER_MAX_FILES = 5000;
 const PARSING_BATCH_SIZE = 25;
-/** Process this many files per tick so we yield often and can respond to progress polls. */
-const PARSING_YIELD_EVERY = 5;
-/** Delay (ms) between chunks so the event loop can run and CPU doesn't peg. */
-const CHUNK_YIELD_MS = 8;
+/** Process this many files per tick so we yield and stay responsive to other tRPC requests. */
+const PARSING_YIELD_EVERY = 1;
+/** Delay (ms) between chunks so the event loop can run. Use 0 when yielding every file to avoid blocking other pages. */
+const CHUNK_YIELD_MS = 0;
 /** Cache TTL: dependency graph entries expire after 1 hour. */
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -95,6 +95,12 @@ function stripRootFromPath(fullPath: string, rootPrefix: string): string {
   if (!rootPrefix || !n.startsWith(rootPrefix)) return n;
   const rest = n.slice(rootPrefix.length).replace(/^\//, '');
   return rest || n;
+}
+
+/** Canonical form for stored graph paths so node paths and edge source/target match in the UI. */
+function canonicalGraphPath(p: string, rootPrefix: string): string {
+  const stripped = stripRootFromPath(p, rootPrefix);
+  return stripped.replace(/\\/g, '/').trim().replace(/^\.\/+/, '');
 }
 
 export const codebaseRouter = router({
@@ -311,30 +317,39 @@ export const codebaseRouter = router({
           }
           if (end < list.length) {
             const nextStart = end;
-            setTimeout(() => parseBatch(nextStart), CHUNK_YIELD_MS);
+            // Use setImmediate so I/O (e.g. in-flight tRPC requests) can run between batches
+            if (CHUNK_YIELD_MS <= 0) {
+              setImmediate(() => parseBatch(nextStart));
+            } else {
+              setTimeout(() => parseBatch(nextStart), CHUNK_YIELD_MS);
+            }
             return;
           }
+          // Defer heavy completion work so we don't block the event loop; lets pending
+          // requests (e.g. progress poll) complete instead of staying (pending)
           console.log(`[codebase] Dependency graph built: ${allNodes.length} nodes, ${allEdges.length} edges`);
-          if (!invalidatedKeys.has(key)) {
-            const knownFiles = new Set(list);
-            const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
-            const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
-            const strippedNodes = allNodes.map((n) => ({ path: stripRootFromPath(n.path, rootPrefix) }));
-            const strippedEdges = normalizedEdges.map((e) => ({
-              source: stripRootFromPath(e.source, rootPrefix),
-              target: stripRootFromPath(e.target, rootPrefix),
-              type: e.type,
-            }));
-            graphCache.set(key, {
-              nodes: strippedNodes,
-              edges: strippedEdges,
-              truncated: false,
-              cachedAt: Date.now(),
-            });
-          }
-          invalidatedKeys.delete(key);
-          buildStateMap.delete(key);
-          if (currentBuildKey === key) currentBuildKey = null;
+          setImmediate(() => {
+            if (!invalidatedKeys.has(key)) {
+              const knownFiles = new Set(list);
+              const normalizedEdges = normalizeEdgeTargetsToKnownFiles(allEdges, knownFiles);
+              const rootPrefix = getStripPrefixForGraph(projectRoot, pathArg);
+              const strippedNodes = allNodes.map((n) => ({ path: canonicalGraphPath(n.path, rootPrefix) }));
+              const strippedEdges = normalizedEdges.map((e) => ({
+                source: canonicalGraphPath(e.source, rootPrefix),
+                target: canonicalGraphPath(e.target, rootPrefix),
+                type: e.type,
+              }));
+              graphCache.set(key, {
+                nodes: strippedNodes,
+                edges: strippedEdges,
+                truncated: false,
+                cachedAt: Date.now(),
+              });
+            }
+            invalidatedKeys.delete(key);
+            if (currentBuildKey === key) currentBuildKey = null;
+            buildStateMap.delete(key);
+          });
         }
 
         parseBatch(0);

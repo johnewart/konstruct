@@ -268,7 +268,6 @@ export function Chat() {
     },
     [sessionId]
   );
-  const sendAbortRef = useRef<AbortController | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const workLogRef = useRef<HTMLDivElement | null>(null);
   const todoListRef = useRef<HTMLUListElement | null>(null);
@@ -452,28 +451,10 @@ export function Chat() {
   }, [providerId, defaultPodId]);
   const { data: sessions, refetch: refetchSessions } =
     trpc.sessions.list.useQuery();
+  // Do not pass an abort signal to sendMessage. That way navigation, unmount, or
+  // React Query cancellation won't drop the request and trigger "Claude Code process aborted by user".
+  // The run is only aborted when the user explicitly clicks Cancel (abortRun.mutate).
   const sendMessage = trpc.chat.sendMessage.useMutation({
-    mutationFn: (input: {
-      sessionId: string;
-      content: string;
-      modeId?: string;
-      providerId?: string;
-      model?: string;
-    }) => {
-      const signal = sendAbortRef.current?.signal;
-      return (
-        utils.client as {
-          chat: {
-            sendMessage: {
-              mutate: (
-                input: typeof input,
-                opts?: { signal?: AbortSignal }
-              ) => Promise<unknown>;
-            };
-          };
-        }
-      ).chat.sendMessage.mutate(input, signal ? { signal } : undefined);
-    },
     onSuccess: (data) => {
       setRunCancelled(false);
       setRunPendingSince(Date.now());
@@ -488,7 +469,6 @@ export function Chat() {
       utils.chat.listRules.invalidate();
     },
     onSettled: () => {
-      sendAbortRef.current = null;
       setPendingUserMessage(null);
     },
   });
@@ -746,9 +726,6 @@ export function Chat() {
         return;
       }
 
-      sendAbortRef.current?.abort();
-      const controller = new AbortController();
-      sendAbortRef.current = controller;
       setPendingUserMessage(text);
       sendMessage.mutate({
         sessionId,
@@ -775,7 +752,6 @@ export function Chat() {
   );
 
   const handleCancel = useCallback(() => {
-    sendAbortRef.current?.abort();
     if (sessionId) abortRun.mutate({ sessionId });
     setRunCancelled(true);
     setRunPendingSince(null);
@@ -908,9 +884,6 @@ export function Chat() {
       e.preventDefault();
       const text = input.trim();
       if (!text || !sessionId) return;
-      sendAbortRef.current?.abort();
-      const controller = new AbortController();
-      sendAbortRef.current = controller;
       setPendingUserMessage(text);
       sendMessage.mutate({
         sessionId,
@@ -1456,9 +1429,7 @@ export function Chat() {
                               <span className="chat-tool-status__text">
                                 {entry.type === 'status'
                                   ? entry.description
-                                  : entry.description
-                                    ? `${entry.toolName ?? 'tool'}(${entry.description})`
-                                    : (entry.toolName ?? 'tool')}
+                                  : entry.description ?? (entry.toolName?.replace(/^mcp__konstruct__/, '') ?? 'tool')}
                               </span>
                             </div>
                           ))}
@@ -1790,7 +1761,7 @@ export function Chat() {
                                 ) : (
                                   <>
                                     <span className="chat-work-log__tool-name">
-                                      {entry.toolName}
+                                      {entry.toolName?.replace(/^mcp__konstruct__/, '') ?? 'tool'}
                                       {entry.pending && (
                                         <span className="chat-work-log__pending">
                                           {' '}

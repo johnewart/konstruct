@@ -220,6 +220,30 @@ describe('Dependency Graph', () => {
       expect(out[0].target).toBe('/repo/src/external');
     });
 
+    it('resolves Python package directory target to __init__.py', () => {
+      const known = new Set(['/repo/mypackage/__init__.py', '/repo/main.py']);
+      const edges = [
+        { source: '/repo/main.py', target: '/repo/mypackage', type: 'import' },
+      ];
+      const out = normalizeEdgeTargetsToKnownFiles(edges, known);
+      expect(out).toHaveLength(1);
+      expect(out[0].target).toBe('/repo/mypackage/__init__.py');
+    });
+
+    it('prefers __init__.py over index.<ext> when both exist (Python package wins)', () => {
+      const known = new Set([
+        '/repo/mypkg/__init__.py',
+        '/repo/mypkg/index.ts',
+        '/repo/main.py',
+      ]);
+      const edges = [
+        { source: '/repo/main.py', target: '/repo/mypkg', type: 'import' },
+      ];
+      const out = normalizeEdgeTargetsToKnownFiles(edges, known);
+      expect(out).toHaveLength(1);
+      expect(out[0].target).toBe('/repo/mypkg/__init__.py');
+    });
+
     it('normalizes path separators so backslash and forward slash match', () => {
       const known = new Set([path.join('/repo', 'src', 'bar.ts')]);
       const edges = [
@@ -317,6 +341,30 @@ describe('Dependency Graph', () => {
       expect(edges.some((e) => e.source === componentPath && e.target === buttonPath)).toBe(true);
       const inboundToButton = edges.filter((e) => e.target === buttonPath);
       expect(inboundToButton.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('resolves Python package __init__.py via normalizeEdgeTargetsToKnownFiles (integration)', () => {
+      // Scenario: mypackage/submod.py does `from . import api`.
+      //   resolveModulePath(submodPy, '', 1) returns dirname(submodPy) = <pkgDir>/mypackage.
+      //   After normalizeEdgeTargetsToKnownFiles, that bare directory path should resolve
+      //   to mypackage/__init__.py because __init__.py is present in the known-files set.
+      const pkgDir = path.join(FIXTURES_DIR, 'lang-py-pkg');
+      const initPy = path.join(pkgDir, 'mypackage', '__init__.py');
+      const submodPy = path.join(pkgDir, 'mypackage', 'submod.py');
+      const knownFiles = new Set([initPy, submodPy]);
+
+      const submodSource = fs.readFileSync(submodPy, 'utf-8');
+      const graph = buildDependencyGraph(submodSource, 'py', submodPy);
+
+      // Verify the parser produced at least one import edge from submod.py
+      const importEdges = graph.edges.filter((e) => e.source === submodPy && e.type === 'import');
+      expect(importEdges.length).toBeGreaterThanOrEqual(1);
+
+      const normalized = normalizeEdgeTargetsToKnownFiles(graph.edges, knownFiles);
+
+      // The edge whose target was the bare mypackage/ directory must resolve to __init__.py
+      const toInit = normalized.find((e) => e.source === submodPy && e.target === initPy);
+      expect(toInit).toBeDefined();
     });
 
     it('parses lang-py fixture and returns expected nodes and edges', () => {

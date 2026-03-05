@@ -24,6 +24,8 @@ import type {
   DependencyGraph,
   DependencyNode,
   DependencyEdge,
+  SymbolInfo,
+  SymbolKind,
 } from '../dependencyGraphTypes';
 
 /** Minimal AST node shape (tree-sitter compatible). */
@@ -62,4 +64,4 @@ export interface OutlineConfig {
   indentBlockTypes?: Set<string>;
 }
 
-export type { DependencyGraph, DependencyNode, DependencyEdge };
+export type { DependencyGraph, DependencyNode, DependencyEdge, SymbolInfo, SymbolKind };

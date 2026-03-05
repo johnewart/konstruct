@@ -22,6 +22,7 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { getToolStatus } from './toolStatus';
 
 /** MCP server config for the SDK (e.g. SSE or HTTP). */
 export type McpServerConfig =
@@ -47,21 +48,20 @@ export interface McpProgressStore {
   updateLastThinkingEntry?(sessionId: string, description: string, resultSummary: string): void;
 }
 
-function shortToolDescription(toolName: string, toolInput: unknown): string {
-  if (toolInput == null) return toolName;
-  try {
-    const obj = typeof toolInput === 'object' ? toolInput as Record<string, unknown> : { value: toolInput };
-    const parts: string[] = [];
-    for (const [k, v] of Object.entries(obj)) {
-      if (parts.length >= 2) break;
-      if (v === undefined || v === null) continue;
-      const s = typeof v === 'string' ? v : JSON.stringify(v);
-      parts.push(`${k}=${s.length > 30 ? s.slice(0, 27) + '…' : s}`);
-    }
-    return parts.length ? `${toolName}(${parts.join(', ')})` : toolName;
-  } catch {
-    return toolName;
-  }
+const MCP_KONSTRUCT_PREFIX = 'mcp__konstruct__';
+
+function shortToolName(fullName: string): string {
+  return fullName.startsWith(MCP_KONSTRUCT_PREFIX)
+    ? fullName.slice(MCP_KONSTRUCT_PREFIX.length)
+    : fullName;
+}
+
+function toolDescriptionForProgress(toolName: string, toolInput: unknown): string {
+  const short = shortToolName(toolName);
+  const args = (toolInput != null && typeof toolInput === 'object'
+    ? toolInput
+    : {}) as Record<string, unknown>;
+  return getToolStatus(short, args);
 }
 
 function toolResponseToSummary(toolResponse: unknown): string {
@@ -118,6 +118,20 @@ export type ToolCallHistoryEntry = {
   result: string;
 };
 
+/** Thrown when the SDK query is aborted (timeout or user cancel) but partial tool call history is available for persisting. */
+export class SdkAbortWithHistoryError extends Error {
+  constructor(
+    message: string,
+    public readonly toolCallHistory: ToolCallHistoryEntry[]
+  ) {
+    super(message);
+    this.name = 'SdkAbortWithHistoryError';
+  }
+  static is(err: unknown): err is SdkAbortWithHistoryError {
+    return err instanceof SdkAbortWithHistoryError;
+  }
+}
+
 export interface ClaudeSdkAgentOptions {
   /** Working directory for the agent (e.g. project root). */
   cwd?: string;
@@ -129,8 +143,10 @@ export interface ClaudeSdkAgentOptions {
   signal?: AbortSignal;
   /** Path to Claude Code executable; uses SDK default if unset. */
   pathToClaudeCodeExecutable?: string;
-  /** Request timeout in ms. Kills the query if exceeded. */
+  /** Request timeout in ms. 0 = no timeout. Default 0. Set via KONSTRUCT_SDK_TIMEOUT_MS env for a limit. */
   timeoutMs?: number;
+  /** Called after each MCP tool result so the run loop can persist assistant + tool messages immediately. */
+  onMcpToolComplete?: (toolCallHistory: ToolCallHistoryEntry[]) => void;
   /** MCP servers to attach (e.g. Konstruct backend for read_file, grep, etc.). */
   mcpServers?: Record<string, McpServerConfig>;
   /** When true, set permissionMode to bypassPermissions so MCP tools run without prompting. Use when attaching trusted servers (e.g. Konstruct). */
@@ -154,7 +170,7 @@ export async function runSdkQuery(
   options: ClaudeSdkAgentOptions = {}
 ): Promise<{ result: string; toolCallHistory?: ToolCallHistoryEntry[] }> {
   const abortController = new AbortController();
-  const timeoutMs = options.timeoutMs ?? 300_000;
+  const timeoutMs = options.timeoutMs ?? 0;
 
   const timeoutId =
     timeoutMs > 0
@@ -199,10 +215,11 @@ export async function runSdkQuery(
                     tool_use_id?: string;
                   }) => {
                     if (input.hook_event_name === 'PreToolUse' && input.tool_name && sessionId && progressStore) {
-                      const desc = shortToolDescription(input.tool_name, input.tool_input);
+                      const short = shortToolName(input.tool_name);
+                      const desc = toolDescriptionForProgress(input.tool_name, input.tool_input);
                       progressStore.pushProgress(sessionId, {
                         type: 'tool',
-                        toolName: input.tool_name,
+                        toolName: short,
                         description: desc,
                         pending: true,
                       });
@@ -210,7 +227,7 @@ export async function runSdkQuery(
                     if (input.hook_event_name === 'PreToolUse' && input.tool_name && input.tool_use_id) {
                       toolCallHistory.push({
                         id: input.tool_use_id,
-                        name: input.tool_name,
+                        name: shortToolName(input.tool_name),
                         arguments: JSON.stringify(input.tool_input ?? {}),
                         result: '',
                       });
@@ -240,6 +257,7 @@ export async function runSdkQuery(
                     if (input.hook_event_name === 'PostToolUse' && input.tool_use_id) {
                       const entry = toolCallHistory.find((e) => e.id === input.tool_use_id);
                       if (entry) entry.result = toolResponseToResultString(input.tool_response);
+                      options.onMcpToolComplete?.(toolCallHistory);
                     }
                     return { continue: true };
                   },
@@ -257,45 +275,55 @@ export async function runSdkQuery(
   let streamStatusPushed = false;
 
   try {
-    for await (const msg of q) {
-      if (msg.type === 'stream_event') {
-        const text = textFromStreamEvent((msg as { event?: unknown }).event);
-        if (text && sessionId && progressStore) {
-          if (!streamStatusPushed) {
-            progressStore.pushProgress(sessionId, {
-              type: 'tool',
-              toolName: 'Thinking',
-              description: '',
-              pending: true,
-            });
-            streamStatusPushed = true;
+    try {
+      for await (const msg of q) {
+        if (msg.type === 'stream_event') {
+          const text = textFromStreamEvent((msg as { event?: unknown }).event);
+          if (text && sessionId && progressStore) {
+            if (!streamStatusPushed) {
+              progressStore.pushProgress(sessionId, {
+                type: 'tool',
+                toolName: 'Thinking',
+                description: '',
+                pending: true,
+              });
+              streamStatusPushed = true;
+            }
+            streamedText += text;
+            const full = streamedText.trim();
+            const oneLine = full.replace(/\s+/g, ' ').trim().slice(0, 120);
+            const description = oneLine ? `text=${oneLine}${oneLine.length >= 120 ? '…' : ''}` : '';
+            if (progressStore.updateLastThinkingEntry) {
+              progressStore.updateLastThinkingEntry(sessionId, description, full);
+            } else if (progressStore.updateLastStatusResult) {
+              progressStore.updateLastStatusResult(sessionId, full.slice(-2000));
+            } else {
+              progressStore.updateLastResult(sessionId, full.slice(-2000));
+            }
           }
-          streamedText += text;
-          const full = streamedText.trim();
-          const oneLine = full.replace(/\s+/g, ' ').trim().slice(0, 120);
-          const description = oneLine ? `text=${oneLine}${oneLine.length >= 120 ? '…' : ''}` : '';
-          if (progressStore.updateLastThinkingEntry) {
-            progressStore.updateLastThinkingEntry(sessionId, description, full);
-          } else if (progressStore.updateLastStatusResult) {
-            progressStore.updateLastStatusResult(sessionId, full.slice(-2000));
-          } else {
-            progressStore.updateLastResult(sessionId, full.slice(-2000));
+          continue;
+        }
+        if (msg.type === 'result') {
+          if (msg.subtype === 'success') {
+            return {
+              result: msg.result,
+              toolCallHistory: useProgress && toolCallHistory.length > 0 ? toolCallHistory : undefined,
+            };
           }
+          const errors = 'errors' in msg ? msg.errors : [];
+          throw new Error(errors.length ? errors.join('; ') : 'Query failed');
         }
-        continue;
       }
-      if (msg.type === 'result') {
-        if (msg.subtype === 'success') {
-          return {
-            result: msg.result,
-            toolCallHistory: useProgress && toolCallHistory.length > 0 ? toolCallHistory : undefined,
-          };
-        }
-        const errors = 'errors' in msg ? msg.errors : [];
-        throw new Error(errors.length ? errors.join('; ') : 'Query failed');
+      throw new Error('No result from query');
+    } catch (inner) {
+      if (useProgress && toolCallHistory.length > 0) {
+        throw new SdkAbortWithHistoryError(
+          inner instanceof Error ? inner.message : String(inner),
+          toolCallHistory
+        );
       }
+      throw inner;
     }
-    throw new Error('No result from query');
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     if (typeof (q as { close?: () => void }).close === 'function') {
