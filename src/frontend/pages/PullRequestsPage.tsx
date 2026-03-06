@@ -92,7 +92,7 @@ type PRItem = {
 };
 
 export function PullRequestsPage() {
-  const { providerId: projectProviderId, modelId: projectModelId } = useProjectModel();
+  const { providerId: projectProviderId, modelId: projectModelId, projectId } = useProjectModel();
   const [selectedPr, setSelectedPr] = useState<PRItem | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [reviewChatSessionId, setReviewChatSessionId] = useState<string | null>(null);
@@ -156,7 +156,7 @@ export function PullRequestsPage() {
 
   const depGraphRefetchAt100 = useRef(false);
   const { data: depGraph, isLoading: depGraphLoading, refetch: refetchDepGraph } = trpc.codebase.getDependencyGraph.useQuery(
-    { path: '.' },
+    { path: '.', projectId: projectId ?? '' },
     {
       enabled: !!selectedPr && diffFiles.length > 0,
       refetchInterval: (q) => {

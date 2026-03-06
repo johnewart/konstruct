@@ -208,7 +208,7 @@ export const codebaseRouter = router({
    * until `building` is `false`.
    */
   getDependencyGraph: publicProcedure
-    .input(z.object({ path: z.string().optional() }).optional())
+    .input(z.object({ path: z.string().optional(), projectId: z.string().optional() }).optional())
     .query(({ ctx, input }) => {
       const pathArg = input?.path?.trim() || '.';
       const key = fullGraphKey(ctx.workspace.getLocalPath() ?? '');
@@ -397,7 +397,7 @@ export const codebaseRouter = router({
    * call triggers a fresh build. Path is ignored (there is only one graph per project).
    */
   invalidateDependencyGraph: publicProcedure
-    .input(z.object({ path: z.string().optional() }).optional())
+    .input(z.object({ path: z.string().optional(), projectId: z.string().optional() }).optional())
     .mutation(({ ctx }) => {
       const key = fullGraphKey(ctx.workspace.getLocalPath() ?? '');
       graphCache.delete(key);

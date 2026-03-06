@@ -21,7 +21,6 @@ import {
   Navigate,
   Link,
   useLocation,
-  useNavigate,
 } from 'react-router-dom';
 import { useState, useEffect, useMemo, Suspense } from 'react';
 import {
@@ -74,7 +73,6 @@ const ACTIVE_PROJECT_STORAGE_KEY = 'konstruct-active-project-id';
 
 function TopNavProjectSelector() {
   const utils = trpc.useUtils();
-  const navigate = useNavigate();
   const { data: projects = [] } = trpc.projects.list.useQuery();
   const { data: active } = trpc.projects.getActive.useQuery();
   const setActive = trpc.projects.setActive.useMutation({
@@ -87,7 +85,6 @@ function TopNavProjectSelector() {
       void utils.review.getOrCreateSession.invalidate();
       void utils.github.getRepo.invalidate();
       void utils.github.listPullRequests.invalidate();
-      navigate('/');
     },
   });
 

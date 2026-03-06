@@ -116,8 +116,10 @@ export function CodeExplorerPage() {
   const [pathArg, setPathArg] = useState('.');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const { data: activeProject } = trpc.projects.getActive.useQuery();
+  const projectId = activeProject?.id ?? '';
   const { data, isLoading, error, refetch } = trpc.codebase.getDependencyGraph.useQuery(
-    { path: pathArg || '.' },
+    { path: pathArg || '.', projectId },
     {
       enabled: true,
       refetchInterval: (query) => {
@@ -159,7 +161,7 @@ export function CodeExplorerPage() {
   });
 
   const handleRebuild = () => {
-    invalidateGraph.mutate({ path: pathArg || '.' });
+    invalidateGraph.mutate({ path: pathArg || '.', projectId });
   };
 
   const building = data?.building ?? false;
