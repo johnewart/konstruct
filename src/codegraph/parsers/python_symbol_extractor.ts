@@ -101,6 +101,35 @@ function isMainGuard(node: SyntaxNode): boolean {
   return cond.text.includes('__name__');
 }
 
+/**
+ * Path segment for symbol ids: relative path from common root when multiple files,
+ * else basename. Ensures same basename in different dirs (e.g. a/foo.py vs b/foo.py) stay distinct.
+ */
+function getPathForIds(filename: string, allFilePaths?: string[]): string {
+  if (!allFilePaths || allFilePaths.length <= 1) {
+    return path.basename(filename);
+  }
+  const root = computeCommonRoot(allFilePaths);
+  const resolved = path.resolve(filename);
+  const rel = path.relative(root, resolved);
+  const normalized = rel.replace(/\\/g, '/') || path.basename(filename);
+  return normalized;
+}
+
+function computeCommonRoot(filePaths: string[]): string {
+  if (filePaths.length === 0) return '';
+  const normalized = filePaths.map((p) => path.resolve(p).replace(/\\/g, '/'));
+  let prefix = normalized[0];
+  for (let i = 1; i < normalized.length; i++) {
+    const p = normalized[i];
+    while (prefix.length > 0 && !(p === prefix || p.startsWith(prefix + '/'))) {
+      prefix = path.dirname(prefix).replace(/\\/g, '/');
+    }
+  }
+  // prefix is the longest common path prefix; if it doesn't end with / it's the common directory
+  return prefix || '/';
+}
+
 const BUILTINS = new Set([
   'print', 'len', 'range', 'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple',
   'type', 'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr', 'delattr',
@@ -149,16 +178,28 @@ export class PythonSymbolExtractor {
   // Stack of current function paths and local type maps
   private classScopeStack: string[] = [];
 
+  // Current function's local variable and parameter names (do not resolve to other files)
+  private currentLocals: Set<string> = new Set();
+
+  // Path segment for symbol ids (full relative path when multi-file, else basename)
+  private pathForIds: string = '';
+  // All file paths in this analysis (for import resolution and pathForIds)
+  private allFilePaths: string[] = [];
+  // Set of definition files from globalDefs (for resolving module name to file in buildImportTable)
+  private allDefFiles: string[] = [];
+
   // ─── Public API ─────────────────────────────────────────────────────────────
 
   /**
    * Extract symbol definitions from a parsed module.
    * Emits a MODULE node if the file has import statements.
+   * @param allFilePaths When provided (multi-file), symbol ids use path relative to common root.
    */
-  extractDefs(rootNode: SyntaxNode, filename: string): SymbolDef[] {
+  extractDefs(rootNode: SyntaxNode, filename: string, allFilePaths?: string[]): SymbolDef[] {
     this.filename = filename;
     this.basename = path.basename(filename);
     this.moduleName = this.basename.replace(/\.py$/, '');
+    this.pathForIds = getPathForIds(filename, allFilePaths);
     this.defs = [];
     this.scopeStack = [];
     this.funcCounter = 0;
@@ -170,7 +211,7 @@ export class PythonSymbolExtractor {
       (c) => c.type === 'import_from_statement' || c.type === 'import_statement'
     );
     if (hasImports) {
-      const moduleId = `file://${this.basename}::${this.moduleName}`;
+      const moduleId = `file://${this.pathForIds}::${this.moduleName}`;
       this.defs.push({
         id: moduleId,
         name: this.moduleName,
@@ -188,15 +229,19 @@ export class PythonSymbolExtractor {
 
   /**
    * Extract symbol references from a parsed module, given global defs for resolution.
+   * @param allFilePaths When provided (multi-file), symbol ids use path relative to common root.
    */
-  extractRefs(rootNode: SyntaxNode, filename: string, globalDefs: SymbolDef[]): SymbolRef[] {
+  extractRefs(rootNode: SyntaxNode, filename: string, globalDefs: SymbolDef[], allFilePaths?: string[]): SymbolRef[] {
     this.filename = filename;
     this.basename = path.basename(filename);
     this.moduleName = this.basename.replace(/\.py$/, '');
+    this.pathForIds = getPathForIds(filename, allFilePaths);
+    this.allFilePaths = allFilePaths ?? [];
+    this.allDefFiles = [...new Set(globalDefs.map((d) => d.location.file))];
     this.refs = [];
     this.resolver = new SymbolResolver(globalDefs);
     this.importTable = new Map();
-    this.moduleNodeId = `file://${this.basename}::${this.moduleName}`;
+    this.moduleNodeId = `file://${this.pathForIds}::${this.moduleName}`;
     this.classScopeStack = [];
     this.selfAttrMap = new Map();
 
@@ -259,7 +304,7 @@ export class PythonSymbolExtractor {
     this.classCounter++;
     const astNodeId = `ast_classdef_${this.classCounter}`;
     const qualName = [...this.scopeStack, className].join('.');
-    const id = `file://${this.basename}::${qualName}`;
+    const id = `file://${this.pathForIds}::${qualName}`;
     const scope = [this.moduleName, ...this.scopeStack].join('.');
 
     // Superclasses
@@ -323,7 +368,7 @@ export class PythonSymbolExtractor {
     this.funcCounter++;
     const astNodeId = `ast_funcdef_${this.funcCounter}`;
     const qualName = [...this.scopeStack, funcName].join('.');
-    const id = `file://${this.basename}::${qualName}`;
+    const id = `file://${this.pathForIds}::${qualName}`;
     const scope = [this.moduleName, ...this.scopeStack].join('.');
 
     const paramsNode = node.childForFieldName('parameters');
@@ -371,7 +416,7 @@ export class PythonSymbolExtractor {
     this.assignCounter++;
     const astNodeId = `ast_assign_${this.assignCounter}`;
     const qualName = [...this.scopeStack, name].join('.');
-    const id = `file://${this.basename}::${qualName}`;
+    const id = `file://${this.pathForIds}::${qualName}`;
     const scope = [this.moduleName, ...this.scopeStack].join('.');
     const kind = isConstantName(name) ? SymbolKind.CONSTANT : SymbolKind.VARIABLE;
 
@@ -416,10 +461,18 @@ export class PythonSymbolExtractor {
         const moduleNode = child.namedChildren[0];
         if (!moduleNode) continue;
         const sourceModule = moduleNode.text;
-        const sourceFile = `${sourceModule}.py`;
+        // Resolve module to actual file path (e.g. a.foo -> path ending with a/foo.py)
+        const modulePathSuffix = sourceModule.replace(/\./g, path.sep) + '.py';
+        const resolvedFile = this.allDefFiles.find((f) => {
+          const norm = path.normalize(f);
+          return norm.endsWith(path.normalize(modulePathSuffix)) || norm.replace(/\\/g, '/').endsWith(sourceModule.replace(/\./g, '/') + '.py');
+        });
+        const pathForIdsOfModule = resolvedFile
+          ? getPathForIds(resolvedFile, this.allFilePaths.length > 0 ? this.allFilePaths : undefined)
+          : sourceModule.replace(/\./g, '/') + '.py'; // fallback for unresolved
         for (let i = 1; i < child.namedChildren.length; i++) {
           const name = child.namedChildren[i].text;
-          this.importTable.set(name, `file://${sourceFile}::${name}`);
+          this.importTable.set(name, `file://${pathForIdsOfModule}::${name}`);
         }
       }
     }
@@ -536,14 +589,10 @@ export class PythonSymbolExtractor {
   }
 
   private processImportStatement(node: SyntaxNode): void {
-    const moduleNode = node.namedChildren[0];
-    if (!moduleNode) return;
-    const sourceModule = moduleNode.text;
-    const sourceFile = `${sourceModule}.py`;
-
     for (let i = 1; i < node.namedChildren.length; i++) {
       const name = node.namedChildren[i].text;
-      const targetPath = `file://${sourceFile}::${name}`;
+      const targetPath = this.importTable.get(name);
+      if (!targetPath) continue;
       this.refs.push({
         path: targetPath,
         location: makeLocation(node, this.filename),
@@ -590,11 +639,15 @@ export class PythonSymbolExtractor {
     const funcName = nameNode.text;
 
     const qualName = [...this.classScopeStack, funcName].join('.');
-    const funcPath = `file://${this.basename}::${qualName}`;
+    const funcPath = `file://${this.pathForIds}::${qualName}`;
     const localTypeMap = new Map<string, string>();
 
-    // Process parameter type annotations → USES_TYPE
+    // Track parameters and locals so we don't resolve them to symbols in other files
     const paramsNode = funcNode.childForFieldName('parameters');
+    const { params } = extractParameters(paramsNode);
+    this.currentLocals = new Set(params);
+
+    // Process parameter type annotations → USES_TYPE
     if (paramsNode) {
       this.processParamAnnotations(paramsNode, funcPath);
     }
@@ -717,9 +770,10 @@ export class PythonSymbolExtractor {
     // Process RHS: emits edges AND returns resolved type for LHS
     const rhsTypePath = this.processRHSAndInferType(right, funcPath, localTypeMap);
 
-    // Track local variable type
-    if (left.type === 'identifier' && rhsTypePath) {
-      localTypeMap.set(left.text, rhsTypePath);
+    // Track local variable type and name (so we don't resolve to other files)
+    if (left.type === 'identifier') {
+      this.currentLocals.add(left.text);
+      if (rhsTypePath) localTypeMap.set(left.text, rhsTypePath);
     }
   }
 
@@ -895,7 +949,7 @@ export class PythonSymbolExtractor {
       // self.method()
       const currentClass = this.classScopeStack[this.classScopeStack.length - 1];
       if (currentClass) {
-        const fullMethodPath = `file://${this.basename}::${[...this.classScopeStack, methodName].join('.')}`;
+        const fullMethodPath = `file://${this.pathForIds}::${[...this.classScopeStack, methodName].join('.')}`;
         const methodDef = this.resolver.getById(fullMethodPath);
         if (methodDef) {
           this.refs.push({
@@ -1004,18 +1058,20 @@ export class PythonSymbolExtractor {
   }
 
   private resolveSymbol(name: string): SymbolDef | null {
-    // 1. Import table
+    // 0. Local variable or parameter in current function — do not resolve to other files
+    if (this.currentLocals.has(name)) return null;
+
+    // 1. Import table (only way to refer to symbols in other files in Python)
     const importedPath = this.importTable.get(name);
     if (importedPath) return this.resolver.getById(importedPath) ?? null;
 
-    // 2. Current file
-    const localPath = `file://${this.basename}::${name}`;
+    // 2. Current file (module/class/function scope definitions)
+    const localPath = `file://${this.pathForIds}::${name}`;
     const local = this.resolver.getById(localPath);
     if (local) return local;
 
-    // 3. Global name lookup
-    const byName = this.resolver.getByName(name);
-    return byName.length > 0 ? byName[0] : null;
+    // Do not resolve by name across the codebase — Python has no magical cross-file names
+    return null;
   }
 
   private resolveTypeName(typeName: string): string | null {

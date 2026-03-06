@@ -65,7 +65,7 @@ export class Analyzer implements DependencyGraphBuilder {
       basename: string;
     }> = [];
 
-    // Pass 1: extract all definitions
+    // Pass 1: extract all definitions (pass all paths so symbol ids use full/relative path)
     for (let i = 0; i < file_paths.length; i++) {
       const filePath = file_paths[i];
       const { rootNode } = parsePythonFile(filePath);
@@ -74,7 +74,7 @@ export class Analyzer implements DependencyGraphBuilder {
       parsedFiles.push({ filePath, rootNode, basename: bn });
 
       const extractor = new PythonSymbolExtractor();
-      const defs = extractor.extractDefs(rootNode, filePath);
+      const defs = extractor.extractDefs(rootNode, filePath, file_paths);
       allDefs.push(...defs);
 
       onProgress?.(i + 1, total, 'defs');
@@ -84,7 +84,7 @@ export class Analyzer implements DependencyGraphBuilder {
     for (let i = 0; i < parsedFiles.length; i++) {
       const { filePath, rootNode } = parsedFiles[i];
       const extractor = new PythonSymbolExtractor();
-      const refs = extractor.extractRefs(rootNode, filePath, allDefs);
+      const refs = extractor.extractRefs(rootNode, filePath, allDefs, file_paths);
       allRefs.push(...refs);
 
       onProgress?.(i + 1, total, 'refs');
