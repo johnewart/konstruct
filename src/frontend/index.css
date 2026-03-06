@@ -2005,18 +2005,18 @@ body {
 }
 
 .chat-form-mode-image {
-  flex: 0 0 clamp(120px, 18vw, 200px);
+  flex: 0 0 clamp(72px, 11vw, 120px);
   display: flex;
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 80px;
+  min-height: 48px;
 }
 
 .chat-form-mode-image__img {
   width: 100%;
   height: 100%;
-  max-height: 140px;
+  max-height: 84px;
   object-fit: contain;
   object-position: center;
 }

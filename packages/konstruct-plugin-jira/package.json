@@ -1,0 +1,14 @@
+{
+  "name": "konstruct-plugin-jira",
+  "version": "0.1.0",
+  "description": "Konstruct plugin for JIRA integration",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./settings": "./settings.mjs"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "private": true
+}
