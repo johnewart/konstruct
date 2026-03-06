@@ -18,7 +18,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Stack, Text, Card, Button, Grid, Box, Switch, Group, Modal, Loader } from '@mantine/core';
 import { useProjectModel } from '../contexts/ProjectModelContext';
-import { PLUGIN_SETTINGS_IMPORTERS } from '../plugins/registry';
+import { getPluginSettingsLoader } from '../plugins/registry';
 import type { PluginSettingsProps } from '../plugins/registry';
 import { RunPodPage } from './RunPod';
 import { VMsPage } from './VMs';
@@ -146,8 +146,6 @@ function PluginsSection() {
   const handleOpenSettings = (pluginId: string) => setSettingsPluginId(pluginId);
   const handleCloseSettings = () => setSettingsPluginId(null);
 
-  const hasSettings = (pluginId: string) => pluginId in PLUGIN_SETTINGS_IMPORTERS;
-
   return (
     <Stack gap="md">
       <Text fw={600} size="sm">
@@ -173,16 +171,14 @@ function PluginsSection() {
                   <Text size="xs" c="dimmed" mt={2}>ID: {p.id}{p.loaded ? ' · loaded' : p.enabled ? ' · will load on restart' : ''}</Text>
                 </Box>
                 <Group gap="xs" wrap="nowrap">
-                  {hasSettings(p.id) && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      onClick={() => handleOpenSettings(p.id)}
-                      aria-label={`Settings for ${p.name}`}
-                    >
-                      Settings
-                    </Button>
-                  )}
+                  <Button
+                    variant="light"
+                    size="xs"
+                    onClick={() => handleOpenSettings(p.id)}
+                    aria-label={`Settings for ${p.name}`}
+                  >
+                    Settings
+                  </Button>
                   <Switch
                     size="md"
                     checked={p.enabled}
@@ -225,20 +221,16 @@ function PluginSettingsModal({
   onSave,
   onClose,
 }: PluginSettingsProps & { onClose: () => void }) {
-  const loader = PLUGIN_SETTINGS_IMPORTERS[pluginId];
   const [Component, setComponent] = useState<React.ComponentType<PluginSettingsProps> | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loader) {
-      setErr('No settings panel for this plugin');
-      return;
-    }
     setErr(null);
     setComponent(null);
-    loader()
-      .then((m) => setComponent(() => m.default))
-      .catch((e) => setErr(e?.message ?? 'Failed to load settings'));
+    const load = getPluginSettingsLoader(pluginId);
+    load()
+      .then((m) => (m?.default ? setComponent(() => m.default) : setErr('No settings panel for this plugin')))
+      .catch((e) => setErr(e?.message?.includes('Cannot find module') ? 'No settings panel for this plugin' : (e?.message ?? 'Failed to load settings')));
   }, [pluginId]);
 
   const handleSave = (next: Record<string, unknown>) => {

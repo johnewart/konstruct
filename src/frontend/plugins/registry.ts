@@ -37,13 +37,11 @@ export interface PluginSettingsProps {
 }
 
 /**
- * Map plugin id -> dynamic import of the plugin's settings component (default export).
- * Add an entry when a plugin provides ./settings, e.g.:
- *   jira: () => import('konstruct-plugin-jira/settings'),
+ * Load settings by convention: konstruct-plugin-<id>/settings (default export).
+ * No registry entry needed. If the plugin has no ./settings module, the import will fail.
  */
-export const PLUGIN_SETTINGS_IMPORTERS: Record<
-  string,
-  () => Promise<{ default: ComponentType<PluginSettingsProps> }>
-> = {
-  example: () => import('konstruct-plugin-example/settings'),
-};
+export function getPluginSettingsLoader(
+  pluginId: string
+): () => Promise<{ default: ComponentType<PluginSettingsProps> }> {
+  return () => import(/* @vite-ignore */ `konstruct-plugin-${pluginId}/settings`);
+}
