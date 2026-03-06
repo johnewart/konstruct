@@ -28,7 +28,8 @@ const CODE_EXPLORER_MAX_FILES = 5000;
 /** Map of supported languages to their file extensions. */
 const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
   python: ['.py'],
-  // Future: javascript: ['.js', '.mjs', '.cjs'], typescript: ['.ts', '.tsx'], etc.
+  javascript: ['.js', '.mjs', '.cjs', '.jsx'],
+  typescript: ['.ts', '.tsx'],
 };
 /** All extensions the analyzer can currently handle. */
 const ALL_PARSABLE_EXTENSIONS: string[] = Object.values(LANGUAGE_EXTENSIONS).flat();
@@ -67,12 +68,13 @@ type BuildState =
       totalFiles: number;
       currentDir?: string;
       directoriesScanned?: string[];
+      directoryCount?: number;
     }
   | { phase: 'error'; error: string };
 
 // Worker message types
 type WorkerMessage =
-  | { type: 'dir'; dir: string; filesFound: number }
+  | { type: 'dir'; dir: string; filesFound: number; directoriesScannedSoFar?: number }
   | { type: 'discovery_complete'; directories: string[]; fileCount: number }
   | { type: 'progress'; phase: 'defs' | 'refs'; filesProcessed: number; totalFiles: number }
   | { type: 'done'; nodes: NodeResult[]; edges: EdgeResult[]; truncated: boolean }
@@ -193,7 +195,6 @@ function filterGraphByPath(
 function spawnAnalysisWorker(
   key: string,
   targetDir: string,
-  language: string,
   stripPrefix: string,
 ): void {
   const workerPath = new URL(
@@ -206,10 +207,10 @@ function spawnAnalysisWorker(
     execArgv: ['--import', 'tsx'],
     workerData: {
       targetDir,
-      language,
-      extensions:  ALL_PARSABLE_EXTENSIONS,
-      maxFiles:    CODE_EXPLORER_MAX_FILES,
-      skipDirs:    SKIP_DIRS,
+      languageExtensions: LANGUAGE_EXTENSIONS,
+      extensions:         ALL_PARSABLE_EXTENSIONS,
+      maxFiles:           CODE_EXPLORER_MAX_FILES,
+      skipDirs:           SKIP_DIRS,
       stripPrefix,
     },
   });
@@ -229,6 +230,7 @@ function spawnAnalysisWorker(
               filesProcessed: msg.filesFound,
               totalFiles: state.totalFiles,
               currentDir: msg.dir,
+              directoryCount: msg.directoriesScannedSoFar ?? state.directoryCount,
             });
           }
         }
@@ -246,6 +248,7 @@ function spawnAnalysisWorker(
               totalFiles: msg.fileCount,
               currentDir: undefined,
               directoriesScanned: msg.directories,
+              directoryCount: msg.directories.length,
             });
           }
         }
@@ -417,10 +420,10 @@ export const codebaseRouter = router({
           building: true,
           phase:          building.phase as string,
           filesProcessed: building.filesProcessed,
-          totalFiles:     building.totalFiles,
-          currentDir:     building.currentDir,
-          directoriesScanned: building.directoriesScanned,
-          pathStripPrefix: stripPrefix,
+          totalFiles:       building.totalFiles,
+          currentDir:       building.currentDir,
+          directoryCount:   building.directoryCount ?? building.directoriesScanned?.length ?? 0,
+          pathStripPrefix:  stripPrefix,
         };
       }
 
@@ -449,7 +452,7 @@ export const codebaseRouter = router({
         currentDir:     undefined,
       });
 
-      spawnAnalysisWorker(key, ctx.projectRoot, 'python', stripPrefix);
+      spawnAnalysisWorker(key, ctx.projectRoot, stripPrefix);
 
       return {
         error: null,

@@ -49,7 +49,7 @@ describe('codebaseAnalyzer.worker', () => {
           execArgv: ['--import', 'tsx'],
           workerData: {
             targetDir: tempDir,
-            language: 'python',
+            languageExtensions: { python: ['.py'] },
             extensions: ['.py'],
             maxFiles: 5000,
             skipDirs: SKIP_DIRS,

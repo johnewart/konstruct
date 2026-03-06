@@ -2,14 +2,15 @@
  * Worker thread: runs the codegraph analyzer off the main event loop.
  *
  * Receives `workerData`:
- *   - targetDir:   string   — root directory to scan
- *   - language:    string   — e.g. "python"
- *   - extensions:  string[] — file extensions to collect, e.g. [".py"]
- *   - maxFiles:    number
- *   - skipDirs:    string[] — directory names to skip
- *   - stripPrefix: string   — path prefix to strip for relative node IDs
- *   - truncated:   boolean  — whether file list was capped (already computed
- *                             by the parent before spawning, or computed here)
+ *   - targetDir:          string   — root directory to scan
+ *   - languageExtensions: Record<string, string[]> — e.g. { python: ['.py'], javascript: ['.js', ...] }
+ *   - extensions:        string[] — all file extensions to collect (flat)
+ *   - maxFiles:           number
+ *   - skipDirs:           string[] — directory names to skip
+ *   - stripPrefix:        string   — path prefix to strip for relative node IDs
+ *
+ * Discovers files matching any extension, partitions by language, runs the analyzer
+ * per language, merges the graphs, and returns a file-level graph.
  *
  * Posts messages to parent:
  *   { type: 'dir',               dir: string, filesFound: number }
@@ -34,7 +35,7 @@ interface EdgeResult { source: string; target: string; type: string }
 
 interface WorkerInput {
   targetDir: string;
-  language: string;
+  languageExtensions: Record<string, string[]>;
   extensions: string[];
   maxFiles: number;
   skipDirs: string[];
@@ -68,7 +69,11 @@ function graphToFileLevel(
 
   const symbolToRelPath = new Map<string, string>();
   for (const [symbolId, def] of graph.nodes.entries()) {
-    const absPath = path.resolve(def.location.file).replace(/\\/g, '/');
+    // location.file may be relative (from getPathForIds) or absolute; resolve against targetDir when relative
+    const filePath = def.location.file;
+    const absPath = path.isAbsolute(filePath)
+      ? path.resolve(filePath).replace(/\\/g, '/')
+      : path.resolve(targetDirNorm, filePath).replace(/\\/g, '/');
     // Only include symbols from files under targetDir (never from sibling dirs like ../konstruct)
     if (!absPath.startsWith(targetDirWithSlash) && absPath !== targetDirNorm) continue;
     const relPath = absPath.startsWith(stripPrefixNorm)
@@ -121,7 +126,7 @@ function collectFiles(
     if (files.length >= maxFiles) return;
     const relDir = path.relative(targetDir, current) || '.';
     directories.push(relDir);
-    parentPort?.postMessage({ type: 'dir', dir: relDir, filesFound: files.length });
+    parentPort?.postMessage({ type: 'dir', dir: relDir, filesFound: files.length, directoriesScannedSoFar: directories.length });
 
     let entries: fs.Dirent[];
     try {
@@ -160,13 +165,83 @@ function collectFiles(
   return { files: filesInScope, truncated: files.length >= maxFiles, directories };
 }
 
+/** Build extension -> language map from languageExtensions. */
+function extensionToLanguage(
+  languageExtensions: Record<string, string[]>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [lang, exts] of Object.entries(languageExtensions)) {
+    for (const ext of exts) {
+      map.set(ext, lang);
+    }
+  }
+  return map;
+}
+
+/** Partition file paths by language (by extension). */
+function partitionFilesByLanguage(
+  files: string[],
+  extToLang: Map<string, string>,
+): Map<string, string[]> {
+  const byLang = new Map<string, string[]>();
+  for (const file of files) {
+    const ext = path.extname(file);
+    const lang = extToLang.get(ext) ?? 'javascript'; // .js/.ts default
+    const list = byLang.get(lang) ?? [];
+    list.push(file);
+    byLang.set(lang, list);
+  }
+  return byLang;
+}
+
+/** Merge multiple dependency graphs into one (combined nodes, edges, name map). */
+function mergeGraphs(graphs: DependencyGraph[]): DependencyGraph {
+  if (graphs.length === 0) {
+    return {
+      nodes: new Map(),
+      edges: [],
+      name_to_symbol_map: new Map(),
+      metadata: new Map([['language', 'none'], ['files', []], ['node_count', 0], ['edge_count', 0]]),
+    };
+  }
+  if (graphs.length === 1) return graphs[0];
+
+  const nodes = new Map<string, import('../../codegraph/spec/graph.spec.ts').SymbolDef>();
+  const edges: import('../../codegraph/spec/graph.spec.ts').DependencyEdge[] = [];
+  const name_to_symbol_map = new Map<string, import('../../codegraph/spec/graph.spec.ts').SymbolDef[]>();
+  const allFiles: string[] = [];
+
+  for (const g of graphs) {
+    for (const [id, def] of g.nodes) {
+      nodes.set(id, def);
+    }
+    edges.push(...g.edges);
+    const files = g.metadata.get('files');
+    if (Array.isArray(files)) allFiles.push(...files);
+    for (const [name, defs] of g.name_to_symbol_map) {
+      const existing = name_to_symbol_map.get(name) ?? [];
+      name_to_symbol_map.set(name, [...existing, ...defs]);
+    }
+  }
+
+  const metadata = new Map<string, unknown>([
+    ['language', graphs.length > 1 ? 'mixed' : graphs[0].metadata.get('language') ?? 'unknown'],
+    ['files', allFiles],
+    ['node_count', nodes.size],
+    ['edge_count', edges.length],
+  ]);
+
+  return { nodes, edges, name_to_symbol_map, metadata };
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 const input = workerData as WorkerInput;
 
 try {
   const targetDirResolved = path.resolve(input.targetDir);
-  console.log(`[codebase] Starting scan: targetDir=${targetDirResolved}, language=${input.language}, stripPrefix=${input.stripPrefix}`);
+  const extToLang = extensionToLanguage(input.languageExtensions);
+  console.log(`[codebase] Starting scan: targetDir=${targetDirResolved}, stripPrefix=${input.stripPrefix}, extensions=${input.extensions.join(', ')}`);
 
   if (!fs.existsSync(targetDirResolved)) {
     throw new Error(`Target directory does not exist: ${targetDirResolved}`);
@@ -188,7 +263,7 @@ try {
     skipDirs,
   );
 
-  console.log(`[codebase] Discovery complete: ${files.length} file(s) in ${directories.length} directories: ${directories.slice(0, 20).join(', ')}${directories.length > 20 ? ` ... (+${directories.length - 20} more)` : ''}`);
+  console.log(`[codebase] Discovery complete: ${files.length} file(s) in ${directories.length} directories`);
   parentPort?.postMessage({ type: 'discovery_complete', directories, fileCount: files.length });
   parentPort?.postMessage({
     type: 'progress',
@@ -202,15 +277,30 @@ try {
     process.exit(0);
   }
 
-  // Phase 2: analyze (two passes, with per-file progress)
-  const graph = analyzer.analyze_files(
-    files,
-    input.language,
-    (filesProcessed, totalFiles, phase) => {
-      parentPort?.postMessage({ type: 'progress', phase, filesProcessed, totalFiles });
-    },
-  );
+  // Phase 2: partition by language and analyze each group; merge graphs
+  const byLang = partitionFilesByLanguage(files, extToLang);
+  const graphs: DependencyGraph[] = [];
+  let progressOffset = 0;
 
+  for (const [language, langFiles] of byLang) {
+    if (langFiles.length === 0) continue;
+    const graph = analyzer.analyze_files(
+      langFiles,
+      language,
+      (filesProcessed, _totalFiles, phase) => {
+        parentPort?.postMessage({
+          type: 'progress',
+          phase,
+          filesProcessed: progressOffset + filesProcessed,
+          totalFiles: files.length,
+        });
+      },
+    );
+    graphs.push(graph);
+    progressOffset += langFiles.length;
+  }
+
+  const graph = mergeGraphs(graphs);
   console.log(
     `[codebase] Analysis complete: ${graph.nodes.size} symbols, ${graph.edges.length} edges`,
   );

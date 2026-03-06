@@ -24,11 +24,17 @@ import http from 'node:http';
 import WebSocket from 'ws';
 import { runAgentLoop, type RunProgressStore } from './runLoop';
 import { createLogger } from '../shared/logger';
+import { getActiveProjectRootFresh } from '../shared/config';
 
 const log = createLogger('agent-worker');
 
 const PORT = parseInt(process.env.AGENT_PORT ?? '3002', 10);
-const projectRoot = process.env.PROJECT_ROOT ?? process.cwd();
+// Use same default as web app: active project from global config, then env, then cwd
+const defaultProjectRoot =
+  getActiveProjectRootFresh() ?? process.env.PROJECT_ROOT ?? process.cwd();
+
+/** Last project root used for a run; log when it changes. */
+let lastUsedProjectRoot: string | null = null;
 const SERVER_WS_URL =
   (process.env.SERVER_URL ?? 'http://localhost:3001').replace(/^http/, 'ws') +
   '/agent-stream';
@@ -181,7 +187,14 @@ const server = http.createServer(async (req, res) => {
       const runProjectRoot =
         typeof body.projectRoot === 'string' && body.projectRoot.trim()
           ? body.projectRoot.trim()
-          : projectRoot;
+          : defaultProjectRoot;
+      if (lastUsedProjectRoot !== null && lastUsedProjectRoot !== runProjectRoot) {
+        log.info(
+          'projectRoot switched',
+          { from: lastUsedProjectRoot, to: runProjectRoot }
+        );
+      }
+      lastUsedProjectRoot = runProjectRoot;
       abortControllersBySession.get(sessionId)?.abort();
       const controller = new AbortController();
       abortControllersBySession.set(sessionId, controller);
@@ -249,5 +262,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  log.info('listening', `http://localhost:${PORT}`, 'projectRoot:', projectRoot);
+  log.info(
+    'listening',
+    `http://localhost:${PORT}`,
+    'default projectRoot:',
+    defaultProjectRoot
+  );
 });

@@ -166,8 +166,7 @@ export function CodeExplorerPage() {
   const buildPhase = data?.phase ?? 'discovering';
   const filesProcessed = data?.filesProcessed ?? 0;
   const totalFiles = data?.totalFiles ?? 0;
-  const currentDir = data?.currentDir ?? '';
-  const directoriesScanned = (data?.directoriesScanned ?? []) as string[];
+  const directoryCount = data?.directoryCount ?? 0;
   const nodes = data?.nodes ?? [];
   const edges = data?.edges ?? [];
   const apiError = data?.error ?? null;
@@ -312,7 +311,7 @@ export function CodeExplorerPage() {
         <Card withBorder padding="md" style={CARD_STYLE}>
           <Text size="sm" fw={500} mb="xs">
             {buildPhase === 'discovering'
-              ? `Scanning ${currentDir || '.'}… ${filesProcessed} file${filesProcessed === 1 ? '' : 's'} found`
+              ? `Scanning ${directoryCount > 0 ? directoryCount : '…'} directories for files…`
               : buildPhase === 'parsing_defs'
                 ? `Extracting symbols… ${filesProcessed} of ${totalFiles} files`
                 : buildPhase === 'parsing_refs'
@@ -321,12 +320,6 @@ export function CodeExplorerPage() {
                     ? `Building dependency graph… ${filesProcessed} of ${totalFiles} files`
                     : 'Analysing…'}
           </Text>
-          {directoriesScanned.length > 0 && (
-            <Text size="xs" c="dimmed" mb="xs">
-              Directories: {directoriesScanned.slice(0, 15).join(', ')}
-              {directoriesScanned.length > 15 ? ` … +${directoriesScanned.length - 15} more` : ''}
-            </Text>
-          )}
           <Progress
             value={
               buildPhase === 'discovering'
