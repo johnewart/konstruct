@@ -408,7 +408,8 @@ export function Chat() {
         // Claude SDK uses its own model selection; use "default" so we don't pass provider id (e.g. UUID) as model
         const providerType = (p as { type?: string }).type ?? '';
         const isClaudeCliOrSdk = providerType === 'claude_sdk';
-        models = isClaudeCliOrSdk ? [{ id: 'default', name: 'Default' }] : [{ id: p.id, name: p.name }];
+        const isCursor = providerType === 'cursor';
+        models = (isClaudeCliOrSdk || isCursor) ? [{ id: 'default', name: 'Default' }] : [{ id: p.id, name: p.name }];
       }
       for (const m of models) {
         list.push({

@@ -161,10 +161,11 @@ function TopNavModelSelector() {
               : [];
       const providerType = (p as { type?: string }).type ?? '';
       const isClaudeCliOrSdk = providerType === 'claude_sdk';
+      const isCursor = providerType === 'cursor';
       const modelList =
         models.length > 0
           ? models
-          : isClaudeCliOrSdk
+          : (isClaudeCliOrSdk || isCursor)
             ? [{ id: 'default', name: 'Default' }]
             : [{ id: p.id, name: p.name }];
       for (const m of modelList) {

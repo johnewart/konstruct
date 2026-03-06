@@ -41,6 +41,7 @@ const PROVIDER_TYPES = [
   { value: 'ollama', label: 'Ollama' },
   { value: 'bedrock', label: 'AWS Bedrock' },
   { value: 'claude_sdk', label: 'Claude Code (SDK)' },
+  { value: 'cursor', label: 'Cursor Agent (CLI)' },
 ];
 
 type Scope = { type: 'global' } | { type: 'project'; projectId: string };
@@ -58,6 +59,7 @@ type FormState = {
   aws_profile: string;
   runpod_pod_id: string;
   claude_sdk_path: string;
+  cursor_agent_path: string;
 };
 
 const emptyForm: FormState = {
@@ -71,6 +73,7 @@ const emptyForm: FormState = {
   aws_profile: '',
   runpod_pod_id: '',
   claude_sdk_path: '',
+  cursor_agent_path: '',
 };
 
 export function LLMProvidersPage() {
@@ -87,6 +90,7 @@ export function LLMProvidersPage() {
     aws_profile: string;
     runpod_pod_id: string;
     claude_sdk_path: string;
+    cursor_agent_path: string;
     models: ProviderModel[];
   } | null>(null);
   const [removeScope, setRemoveScope] = useState<Scope | null>(null);
@@ -103,6 +107,7 @@ export function LLMProvidersPage() {
   const addMutation = trpc.providerConfig.add.useMutation({
     onSuccess: () => {
       utils.providerConfig.list.invalidate();
+      void utils.chat.listProviders.invalidate();
       setFormOpen(false);
       setForm(emptyForm);
     },
@@ -111,6 +116,7 @@ export function LLMProvidersPage() {
   const updateMutation = trpc.providerConfig.update.useMutation({
     onSuccess: () => {
       utils.providerConfig.list.invalidate();
+      void utils.chat.listProviders.invalidate();
       setFormOpen(false);
       setEditing(null);
     },
@@ -119,6 +125,7 @@ export function LLMProvidersPage() {
   const removeMutation = trpc.providerConfig.remove.useMutation({
     onSuccess: () => {
       utils.providerConfig.list.invalidate();
+      void utils.chat.listProviders.invalidate();
       setRemoveScope(null);
       setRemoveId(null);
     },
@@ -179,7 +186,7 @@ export function LLMProvidersPage() {
 
   const openEdit = (
     scope: Scope,
-    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string; aws_profile?: string; runpod_pod_id?: string; claude_sdk_path?: string; models?: ProviderModel[] }
+    p: { id: string; name: string; type: string; secret_ref?: string; base_url?: string; default_model?: string; endpoint?: string; aws_profile?: string; runpod_pod_id?: string; claude_sdk_path?: string; cursor_agent_path?: string; models?: ProviderModel[] }
   ) => {
     setRefreshModelsError(null);
     setEditing({
@@ -194,6 +201,7 @@ export function LLMProvidersPage() {
       aws_profile: p.aws_profile ?? '',
       runpod_pod_id: p.runpod_pod_id ?? '',
       claude_sdk_path: p.claude_sdk_path ?? '',
+      cursor_agent_path: p.cursor_agent_path ?? '',
       models: p.models ?? [],
     });
     setFormOpen(true);
@@ -214,6 +222,7 @@ export function LLMProvidersPage() {
           aws_profile: editing.aws_profile.trim() || undefined,
           runpod_pod_id: editing.runpod_pod_id.trim() || undefined,
           claude_sdk_path: editing.claude_sdk_path.trim() || undefined,
+          cursor_agent_path: editing.cursor_agent_path.trim() || undefined,
           models: editing.models ?? [],
         },
       });
@@ -230,6 +239,7 @@ export function LLMProvidersPage() {
           aws_profile: form.aws_profile.trim() || undefined,
           runpod_pod_id: form.runpod_pod_id.trim() || undefined,
           claude_sdk_path: form.claude_sdk_path.trim() || undefined,
+          cursor_agent_path: form.cursor_agent_path.trim() || undefined,
         },
       });
     }
@@ -318,7 +328,7 @@ export function LLMProvidersPage() {
                     <Table.Tr key={p.id}>
                       <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { claude_sdk_path?: string }).claude_sdk_path ?? (p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
+                      <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { cursor_agent_path?: string }).cursor_agent_path ?? (p as { claude_sdk_path?: string }).claude_sdk_path ?? (p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
                       <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
@@ -375,7 +385,7 @@ export function LLMProvidersPage() {
                       <Table.Tr key={p.id}>
                         <Table.Td><Text size="sm" fw={500}>{p.name}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.type}</Text></Table.Td>
-                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { claude_sdk_path?: string }).claude_sdk_path ?? (p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
+                        <Table.Td><Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>{(p as { cursor_agent_path?: string }).cursor_agent_path ?? (p as { claude_sdk_path?: string }).claude_sdk_path ?? (p as { runpod_pod_id?: string }).runpod_pod_id ?? (p as { aws_profile?: string }).aws_profile ?? p.secret_ref ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm" style={{ wordBreak: 'break-all' }}>{p.base_url ?? p.endpoint ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{p.default_model ?? '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{(p as { models?: unknown[] }).models?.length ?? 0}</Text></Table.Td>
@@ -469,6 +479,15 @@ export function LLMProvidersPage() {
               description="Path to Claude Code executable; omit to use the SDK built-in"
               value={editing ? editing.claude_sdk_path : form.claude_sdk_path}
               onChange={(e) => (editing ? setEditing((x) => x && { ...x, claude_sdk_path: e.target.value }) : setForm((f) => ({ ...f, claude_sdk_path: e.target.value })))}
+            />
+          )}
+          {((editing?.type ?? form.type) === 'cursor') && (
+            <TextInput
+              label="Cursor agent path"
+              placeholder="Leave empty to use agent from PATH"
+              description="Path to Cursor agent CLI (e.g. agent or cursor); uses 'agent' from PATH if unset"
+              value={editing ? editing.cursor_agent_path : form.cursor_agent_path}
+              onChange={(e) => (editing ? setEditing((x) => x && { ...x, cursor_agent_path: e.target.value }) : setForm((f) => ({ ...f, cursor_agent_path: e.target.value })))}
             />
           )}
           {(editing?.type ?? form.type) === 'runpod' && (

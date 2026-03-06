@@ -28,7 +28,7 @@ export type ProviderOption = {
   name: string;
 };
 
-/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama, claude_sdk. */
+/** Same as Go AvailableProviders(): openai, anthropic, bedrock, runpod, plus ollama, claude_sdk, cursor. */
 export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'openai', name: 'OpenAI / Vast' },
   { id: 'ollama', name: 'Ollama (local)' },
@@ -36,6 +36,7 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'anthropic', name: 'Anthropic' },
   { id: 'bedrock', name: 'AWS Bedrock' },
   { id: 'claude_sdk', name: 'Claude Code (SDK)' },
+  { id: 'cursor', name: 'Cursor Agent (CLI)' },
 ];
 
 function getEnv(name: string): string {
@@ -110,6 +111,15 @@ export function getClaudeSdkPath(projectRoot: string, providerId?: string): stri
   const id = (providerId ?? c.defaultProviderId ?? 'claude_sdk').toLowerCase();
   const provider = getProviderById(c, id);
   const path = (provider as { claude_sdk_path?: string } | undefined)?.claude_sdk_path?.trim();
+  return path || undefined;
+}
+
+/** Cursor: path to Cursor agent CLI from provider config, or undefined to use "agent" from PATH. */
+export function getCursorAgentPath(projectRoot: string, providerId?: string): string | undefined {
+  const c = loadConfig(projectRoot);
+  const id = (providerId ?? c.defaultProviderId ?? 'cursor').toLowerCase();
+  const provider = getProviderById(c, id);
+  const path = (provider as { cursor_agent_path?: string } | undefined)?.cursor_agent_path?.trim();
   return path || undefined;
 }
 
@@ -264,6 +274,9 @@ export function getAllProviders(projectRoot: string): {
       url = p.base_url ?? undefined;
     } else if (type === 'claude_sdk') {
       // Claude SDK supports keyless auth (e.g. claude auth); no secret or path required
+      configured = true;
+    } else if (type === 'cursor') {
+      // Cursor agent uses CLI (agent --print); no secret required, path optional
       configured = true;
     } else {
       configured = !!p.secret_ref?.trim();

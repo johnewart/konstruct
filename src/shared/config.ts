@@ -63,6 +63,8 @@ export type ConfigProvider = {
   runpod_pod_id?: string;
   /** Claude SDK: path to Claude Code executable; uses SDK default if unset. */
   claude_sdk_path?: string;
+  /** Cursor: path to Cursor agent CLI (e.g. agent or cursor); uses "agent" from PATH if unset. */
+  cursor_agent_path?: string;
   /** Managed list of models (name + context window) for this provider. */
   models?: ProviderModel[];
   max_tokens?: number;
@@ -207,6 +209,7 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
         aws_profile: p?.aws_profile != null ? String(p.aws_profile).trim() : undefined,
         runpod_pod_id: p?.runpod_pod_id != null ? String(p.runpod_pod_id).trim() : undefined,
         claude_sdk_path: p?.claude_sdk_path != null ? String(p.claude_sdk_path).trim() : undefined,
+        cursor_agent_path: p?.cursor_agent_path != null ? String(p.cursor_agent_path).trim() : undefined,
         models: models?.length ? models : undefined,
         max_tokens: p?.max_tokens != null ? Number(p.max_tokens) : undefined,
         temperature: p?.temperature != null ? Number(p.temperature) : undefined,
@@ -219,6 +222,13 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
       if (idx >= 0 && (mapped[idx].id ?? '') !== 'claude_sdk') {
         claudeSdkReplacedId = mapped[idx].id;
         mapped[idx].id = 'claude_sdk';
+      }
+    }
+    const cursorCount = mapped.filter((p) => (p.type ?? '').toLowerCase() === 'cursor').length;
+    if (cursorCount === 1) {
+      const idx = mapped.findIndex((p) => (p.type ?? '').toLowerCase() === 'cursor');
+      if (idx >= 0 && (mapped[idx].id ?? '') !== 'cursor') {
+        mapped[idx].id = 'cursor';
       }
     }
     return { mapped, claudeSdkReplacedId };

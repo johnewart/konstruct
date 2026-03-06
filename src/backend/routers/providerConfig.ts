@@ -52,6 +52,7 @@ const providerInputSchema = z.object({
   aws_profile: z.string().optional(),
   runpod_pod_id: z.string().optional(),
   claude_sdk_path: z.string().optional(),
+  cursor_agent_path: z.string().optional(),
   models: z.array(providerModelSchema).optional(),
   max_tokens: z.number().optional(),
   temperature: z.number().optional(),
@@ -106,7 +107,9 @@ export const providerConfigRouter = router({
       const config = loadGlobalConfig();
       const existing = config.providers ?? [];
       const isClaudeSdk = input.provider.type.trim().toLowerCase() === 'claude_sdk';
+      const isCursor = input.provider.type.trim().toLowerCase() === 'cursor';
       const existingClaudeSdkIdx = isClaudeSdk ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === 'claude_sdk') : -1;
+      const existingCursorIdx = isCursor ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === 'cursor') : -1;
       if (isClaudeSdk && existingClaudeSdkIdx >= 0) {
         const id = 'claude_sdk';
         const updated: ConfigProvider = {
@@ -121,6 +124,7 @@ export const providerConfigRouter = router({
           aws_profile: input.provider.aws_profile?.trim(),
           runpod_pod_id: input.provider.runpod_pod_id?.trim(),
           claude_sdk_path: input.provider.claude_sdk_path?.trim(),
+          cursor_agent_path: input.provider.cursor_agent_path?.trim(),
           models: input.provider.models,
           max_tokens: input.provider.max_tokens,
           temperature: input.provider.temperature,
@@ -131,7 +135,32 @@ export const providerConfigRouter = router({
         log.debug('add provider (upsert claude_sdk)', id, input.scope);
         return updated;
       }
-      const id = isClaudeSdk ? 'claude_sdk' : randomUUID();
+      if (isCursor && existingCursorIdx >= 0) {
+        const id = 'cursor';
+        const updated: ConfigProvider = {
+          ...existing[existingCursorIdx],
+          id,
+          name: input.provider.name.trim(),
+          type: input.provider.type.trim(),
+          secret_ref: input.provider.secret_ref?.trim(),
+          base_url: input.provider.base_url?.trim(),
+          default_model: input.provider.default_model?.trim(),
+          endpoint: input.provider.endpoint?.trim(),
+          aws_profile: input.provider.aws_profile?.trim(),
+          runpod_pod_id: input.provider.runpod_pod_id?.trim(),
+          claude_sdk_path: input.provider.claude_sdk_path?.trim(),
+          cursor_agent_path: input.provider.cursor_agent_path?.trim(),
+          models: input.provider.models,
+          max_tokens: input.provider.max_tokens,
+          temperature: input.provider.temperature,
+        };
+        existing[existingCursorIdx] = updated;
+        config.providers = existing;
+        saveGlobalConfig(config);
+        log.debug('add provider (upsert cursor)', id, input.scope);
+        return updated;
+      }
+      const id = isClaudeSdk ? 'claude_sdk' : isCursor ? 'cursor' : randomUUID();
       const provider: ConfigProvider = {
         id,
         name: input.provider.name.trim(),
@@ -143,6 +172,7 @@ export const providerConfigRouter = router({
         aws_profile: input.provider.aws_profile?.trim(),
         runpod_pod_id: input.provider.runpod_pod_id?.trim(),
         claude_sdk_path: input.provider.claude_sdk_path?.trim(),
+        cursor_agent_path: input.provider.cursor_agent_path?.trim(),
         models: input.provider.models,
         max_tokens: input.provider.max_tokens,
         temperature: input.provider.temperature,
@@ -170,7 +200,7 @@ export const providerConfigRouter = router({
       const existing = providers[index];
       const nextType = (input.provider.type?.trim() ?? existing.type ?? '').toLowerCase();
       const stableId =
-        nextType === 'claude_sdk' ? 'claude_sdk' : existing.id;
+        nextType === 'claude_sdk' ? 'claude_sdk' : nextType === 'cursor' ? 'cursor' : existing.id;
       providers[index] = {
         ...existing,
         id: stableId,
@@ -183,6 +213,7 @@ export const providerConfigRouter = router({
         aws_profile: input.provider.aws_profile !== undefined ? input.provider.aws_profile?.trim() : existing.aws_profile,
         runpod_pod_id: input.provider.runpod_pod_id !== undefined ? input.provider.runpod_pod_id?.trim() : existing.runpod_pod_id,
         claude_sdk_path: input.provider.claude_sdk_path !== undefined ? input.provider.claude_sdk_path?.trim() : existing.claude_sdk_path,
+        cursor_agent_path: input.provider.cursor_agent_path !== undefined ? input.provider.cursor_agent_path?.trim() : existing.cursor_agent_path,
         models: input.provider.models !== undefined ? input.provider.models : existing.models,
         max_tokens: input.provider.max_tokens !== undefined ? input.provider.max_tokens : existing.max_tokens,
         temperature: input.provider.temperature !== undefined ? input.provider.temperature : existing.temperature,

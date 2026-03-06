@@ -15,10 +15,11 @@
  */
 
 import { loadConfig, getProviderById, resolveProviderSecret } from './config';
-import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeSdkPath } from './providers';
+import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowForModel, getClaudeSdkPath, getCursorAgentPath } from './providers';
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { runSdkQuery, type McpProgressStore } from '../agent/claude-sdk-agent';
+import { runCursorAgent } from '../agent/cursor-cli-agent';
 import * as fs from 'node:fs';
 import { createLogger } from './logger';
 
@@ -147,6 +148,7 @@ export async function chat(
   }
   const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
   const isClaudeSdk = (provider?.type?.toLowerCase() === 'claude_sdk') || (providerId === 'claude_sdk');
+  const isCursor = (provider?.type?.toLowerCase() === 'cursor') || (providerId === 'cursor');
 
   debugLlmLogRequest(messages, {
     providerId,
@@ -210,6 +212,42 @@ export async function chat(
     const sdkRes = { content: result, toolCalls: undefined, toolCallHistory };
     debugLlmLogResponse(sdkRes);
     return sdkRes;
+  }
+
+  if (isCursor) {
+    const prompt = messages
+      .map((m) => {
+        if (m.role === 'system') return `[System]\n${m.content}`;
+        if (m.role === 'user') return `[User]\n${m.content}`;
+        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    const cursorPath = getCursorAgentPath(projectRoot, providerId);
+    const defaultModel = (provider as { default_model?: string } | undefined)?.default_model;
+    const model = options?.model ?? defaultModel ?? undefined;
+    const apiKey = await resolveProviderSecret(projectRoot, providerId);
+    const env = typeof process !== 'undefined' && process.env ? { ...process.env } as Record<string, string | undefined> : undefined;
+    if (env) {
+      if (apiKey?.trim()) env.CURSOR_API_KEY = apiKey;
+      else delete env.CURSOR_API_KEY;
+    }
+    const timeoutMs =
+      options?.timeoutMs ??
+      (typeof process !== 'undefined' && process.env?.KONSTRUCT_SDK_TIMEOUT_MS
+        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
+        : 0);
+    const result = await runCursorAgent(prompt, {
+      cursorPath: cursorPath ?? undefined,
+      cwd: projectRoot || undefined,
+      model: model ?? undefined,
+      timeoutMs: Number.isNaN(timeoutMs) ? 0 : timeoutMs,
+      env,
+    });
+    const cursorRes = { content: result, toolCalls: undefined as undefined, toolCallHistory: undefined as undefined };
+    debugLlmLogResponse(cursorRes);
+    return cursorRes;
   }
 
   if (providerId === 'anthropic') {
