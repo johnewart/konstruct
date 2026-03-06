@@ -58,6 +58,21 @@ const providerInputSchema = z.object({
 });
 
 export const providerConfigRouter = router({
+  /** Whether RunPod management section is enabled in settings. Default true. */
+  getRunpodManagementEnabled: publicProcedure.query(() => {
+    const config = loadGlobalConfig();
+    return { enabled: config.runpodManagementEnabled !== false };
+  }),
+
+  setRunpodManagementEnabled: publicProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(({ input }) => {
+      const config = loadGlobalConfig();
+      config.runpodManagementEnabled = input.enabled;
+      saveGlobalConfig(config);
+      return { enabled: input.enabled };
+    }),
+
   /** List providers from global config only (no config stored in repo .konstruct). */
   list: publicProcedure.query(() => {
     const globalConfig = loadGlobalConfig();

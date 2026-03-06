@@ -62,30 +62,26 @@ function isProviderConfiguredWithSecret(
   return false;
 }
 
-/** OpenAI-compatible provider. Precedence: env (OPENAI_*) then config.llm, then "vast" if Vast key set. */
+/** OpenAI-compatible provider. Precedence: env (OPENAI_*), then "vast" if Vast key set. */
 export function getOpenAIEnv(projectRoot: string): {
   baseUrl: string;
   apiKey: string;
   model: string;
 } {
-  const c = loadConfig(projectRoot);
   const baseUrl =
-    getEnv('OPENAI_BASE_URL') ||
-    (c.llm.base_url ?? '') ||
-    'https://api.openai.com/v1';
-  let apiKey = getEnv('OPENAI_API_KEY') || (c.llm.api_key ?? '');
+    getEnv('OPENAI_BASE_URL') || 'https://api.openai.com/v1';
+  let apiKey = getEnv('OPENAI_API_KEY') || '';
   if (!apiKey && getVastApiKey(projectRoot)) apiKey = 'vast';
   const model = 'gpt-4o-mini';
   return { baseUrl, apiKey, model };
 }
 
-/** Anthropic: env (ANTHROPIC_*) then config.llm (Go uses config.LLM.APIKey for Anthropic too). */
+/** Anthropic: env (ANTHROPIC_*) only. */
 export function getAnthropicEnv(projectRoot: string): {
   apiKey: string;
   model: string;
 } {
-  const c = loadConfig(projectRoot);
-  const apiKey = getEnv('ANTHROPIC_API_KEY') || (c.llm.api_key ?? '');
+  const apiKey = getEnv('ANTHROPIC_API_KEY') || '';
   const model =
     getEnv('ANTHROPIC_MODEL') ||
     'claude-sonnet-4-20250514';
@@ -111,7 +107,7 @@ export function getBedrockEnv(
 /** Claude SDK: path to Claude Code executable from provider config, or undefined to use SDK default. */
 export function getClaudeSdkPath(projectRoot: string, providerId?: string): string | undefined {
   const c = loadConfig(projectRoot);
-  const id = (providerId ?? c.llm?.provider ?? 'claude_sdk').toLowerCase();
+  const id = (providerId ?? c.defaultProviderId ?? 'claude_sdk').toLowerCase();
   const provider = getProviderById(c, id);
   const path = (provider as { claude_sdk_path?: string } | undefined)?.claude_sdk_path?.trim();
   return path || undefined;
@@ -136,11 +132,8 @@ export function getOllamaEnv(projectRoot: string): {
   baseUrl: string;
   model: string;
 } {
-  const c = loadConfig(projectRoot);
   const baseUrl =
-    getEnv('OLLAMA_BASE_URL') ||
-    (c.llm.base_url ?? '') ||
-    'http://localhost:11434/v1';
+    getEnv('OLLAMA_BASE_URL') || 'http://localhost:11434/v1';
   const model =
     getEnv('OLLAMA_MODEL') ||
     'llama3.2';
@@ -174,14 +167,13 @@ export async function getOpenAIEnvAsync(
   providerId?: string
 ): Promise<{ baseUrl: string; apiKey: string; model: string }> {
   const c = loadConfig(projectRoot);
-  const id = (providerId ?? c.llm?.provider ?? 'openai').toLowerCase();
+  const id = (providerId ?? c.defaultProviderId ?? 'openai').toLowerCase();
   const resolved = await resolveProviderSecret(projectRoot, id);
   if (resolved != null) {
     const provider = getProviderById(c, id);
     const baseUrl =
       provider?.base_url ??
       getEnv('OPENAI_BASE_URL') ??
-      c.llm?.base_url ??
       'https://api.openai.com/v1';
     const model = provider?.default_model ?? 'gpt-4o-mini';
     return { baseUrl, apiKey: resolved, model };
@@ -195,7 +187,7 @@ export async function getAnthropicEnvAsync(
   providerId?: string
 ): Promise<{ apiKey: string; model: string }> {
   const c = loadConfig(projectRoot);
-  const id = (providerId ?? c.llm?.provider ?? 'anthropic').toLowerCase();
+  const id = (providerId ?? c.defaultProviderId ?? 'anthropic').toLowerCase();
   const resolved = await resolveProviderSecret(projectRoot, id);
   if (resolved != null) {
     const provider = getProviderById(c, id);
@@ -214,7 +206,7 @@ export async function getRunpodEnvAsync(
   providerId?: string
 ): Promise<{ baseUrl: string; apiKey: string; model: string }> {
   const c = loadConfig(projectRoot);
-  const id = (providerId ?? c.llm?.provider ?? 'runpod').toLowerCase();
+  const id = (providerId ?? c.defaultProviderId ?? 'runpod').toLowerCase();
   const provider = getProviderById(c, id);
   const podId = provider?.runpod_pod_id?.trim();
   if (podId) {
@@ -288,7 +280,7 @@ export function getAllProviders(projectRoot: string): {
     };
   });
   const providers = customProviders;
-  const rawProvider = (c.llm.provider ?? '').trim();
+  const rawProvider = (c.defaultProviderId ?? '').trim();
   const inList = providers.some((p) => (p.id ?? '').toLowerCase() === rawProvider.toLowerCase());
   const defaultProviderId: string = inList ? rawProvider : (providers[0]?.id ?? '');
   return { providers, defaultProviderId };
@@ -312,13 +304,12 @@ export function getContextWindowForModel(
 }
 
 /** Update the default provider in global config. */
-export function setDefaultProvider(providerId: string, projectRoot: string): void {
+export function setDefaultProvider(providerId: string, _projectRoot: string): void {
   const config = loadGlobalConfig();
   const exists = config.providers?.some((p) => (p.id ?? '').toLowerCase() === providerId.toLowerCase());
   if (!exists) {
     throw new Error(`Invalid provider: ${providerId}. Add the provider in LLM Providers first.`);
   }
-  config.llm = config.llm ?? {};
-  config.llm.provider = providerId;
+  config.defaultProviderId = providerId;
   saveGlobalConfig(config);
 }

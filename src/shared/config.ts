@@ -71,14 +71,10 @@ export type ConfigProvider = {
 };
 
 export type KonstructConfig = {
-  /** Current default provider (legacy + default). Model is per-provider. */
-  llm: {
-    provider?: string;
-    api_key?: string;
-    base_url?: string;
-    max_tokens?: number;
-    temperature?: number;
-  };
+  /** Current default provider id (set from UI). Model is per-provider. */
+  defaultProviderId?: string;
+  /** When true, show RunPod section in settings and allow RunPod management. Default true. */
+  runpodManagementEnabled?: boolean;
   /** Provider list: id, name, type, secret_ref, and type-specific options. */
   providers?: ConfigProvider[];
   /** Known projects (global config only): name, git URL, location (local path or VM). */
@@ -106,13 +102,7 @@ export type KonstructConfig = {
   projectModels?: Record<string, { providerId: string; modelId: string }>;
 };
 
-const defaultConfig: KonstructConfig = {
-  llm: {
-    provider: 'openai',
-    max_tokens: 4096,
-    temperature: 0.7,
-  },
-};
+const defaultConfig: KonstructConfig = {};
 
 /** Global config path: ~/.config/konstruct/config.yml */
 export function getGlobalConfigPath(): string {
@@ -177,9 +167,8 @@ function deepMerge(
 /** Normalize raw parsed YAML to KonstructConfig. */
 function normalize(raw: Record<string, unknown> | null): KonstructConfig {
   if (!raw || typeof raw !== 'object') return defaultConfig;
-  const llm = raw.llm as Record<string, unknown> | undefined;
   const providers = raw.providers as ConfigProvider[] | undefined;
-  const rawProvider = (llm?.provider ?? llm?.Provider ?? defaultConfig.llm.provider) as string;
+  const rawDefaultProvider = (raw.defaultProviderId ?? (raw.llm as Record<string, unknown> | undefined)?.provider ?? (raw.llm as Record<string, unknown> | undefined)?.Provider) as string | undefined;
 
   const normalizedProviders = (() => {
     if (!Array.isArray(providers)) return undefined;
@@ -230,23 +219,20 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
   })();
 
   const providersList = normalizedProviders?.mapped;
-  const effectiveProvider =
-    (providersList && normalizedProviders?.claudeSdkReplacedId != null &&
-    (rawProvider ?? '').trim() === normalizedProviders.claudeSdkReplacedId
+  const defaultProviderId =
+    providersList && normalizedProviders?.claudeSdkReplacedId != null &&
+    (rawDefaultProvider ?? '').trim() === normalizedProviders.claudeSdkReplacedId
       ? 'claude_sdk'
-      : rawProvider) as string;
+      : (rawDefaultProvider ?? '').trim() || undefined;
+
+  const runpodManagementEnabled = (() => {
+    const v = raw.runpodManagementEnabled ?? (raw.runpod as Record<string, unknown> | undefined)?.managementEnabled;
+    return v === undefined ? true : !!v;
+  })();
 
   return {
-    llm: {
-      provider: effectiveProvider,
-      api_key: (llm?.api_key ?? llm?.APIKey ?? llm?.apikey ?? '') as string,
-      base_url: (llm?.base_url ?? llm?.BaseURL ?? llm?.baseurl ?? '') as string,
-      max_tokens: (llm?.max_tokens ??
-        llm?.max_tokens ??
-        defaultConfig.llm.max_tokens) as number,
-      temperature: (llm?.temperature ??
-        defaultConfig.llm.temperature) as number,
-    },
+    defaultProviderId: defaultProviderId || undefined,
+    runpodManagementEnabled,
     providers: providersList,
     runpod: raw.runpod as KonstructConfig['runpod'],
     github: (() => {

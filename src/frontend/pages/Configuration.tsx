@@ -15,7 +15,7 @@
  */
 
 import { Link, useSearchParams } from 'react-router-dom';
-import { Tabs, Stack, Group, Text, Card, Button } from '@mantine/core';
+import { Stack, Text, Card, Button, Grid, Box, Switch, Group } from '@mantine/core';
 import { RunPodPage } from './RunPod';
 import { VMsPage } from './VMs';
 import { ProjectsPage } from './Projects';
@@ -25,11 +25,69 @@ import { AssistantInstructionsPage } from './AssistantInstructionsPage';
 import { trpc } from '../../client/trpc';
 
 const TAB_KEY = 'tab';
-const TABS = ['runpod', 'vms', 'projects', 'providers', 'assistants', 'github', 'code'] as const;
-type TabValue = (typeof TABS)[number];
+const SECTIONS = [
+  { id: 'general', label: 'General Settings', description: 'Overview and navigation' },
+  { id: 'runpod', label: 'RunPod', description: 'Configure RunPod GPU pods' },
+  { id: 'vms', label: 'VMs', description: 'Virtual machines' },
+  { id: 'projects', label: 'Projects', description: 'Workspace projects' },
+  { id: 'providers', label: 'Providers', description: 'LLM providers' },
+  { id: 'assistants', label: 'Assistants', description: 'Mode instructions' },
+  { id: 'github', label: 'GitHub', description: 'GitHub integration' },
+  { id: 'code', label: 'Code', description: 'Code graph and cache' },
+] as const;
+type TabValue = (typeof SECTIONS)[number]['id'];
 
 function isValidTab(v: string): v is TabValue {
-  return TABS.includes(v as TabValue);
+  return SECTIONS.some((s) => s.id === v);
+}
+
+function GeneralSettingsSection() {
+  const { data, isLoading } = trpc.providerConfig.getRunpodManagementEnabled.useQuery();
+  const setRunpodEnabled = trpc.providerConfig.setRunpodManagementEnabled.useMutation();
+  const utils = trpc.useUtils();
+  const enabled = data?.enabled ?? true;
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = e.currentTarget.checked;
+    setRunpodEnabled.mutate(
+      { enabled: next },
+      {
+        onSuccess: () => {
+          void utils.providerConfig.getRunpodManagementEnabled.invalidate();
+        },
+      }
+    );
+  };
+
+  return (
+    <Stack gap="md">
+      <Text fw={600} size="sm">
+        Settings
+      </Text>
+      <Text size="sm" c="dimmed">
+        Use the menu on the left to switch between sections: RunPod, projects, LLM providers, assistants, GitHub, and code graph options.
+      </Text>
+      <Group justify="space-between">
+        <Text size="sm" fw={500}>
+          Enable RunPod management
+        </Text>
+        {/* Uncontrolled so the native input handles the toggle; we persist on change */}
+        <Switch
+          key={`runpod-enabled-${enabled}`}
+          size="md"
+          defaultChecked={enabled}
+          disabled={isLoading}
+          onChange={handleChange}
+          aria-label="Enable RunPod management"
+        />
+      </Group>
+      <Text size="sm">
+        <Link to="/" style={{ color: 'var(--app-text)', textDecoration: 'none' }}>
+          ← Back to Chat
+        </Link>
+      </Text>
+    </Stack>
+  );
 }
 
 function CodeConfigSection() {
@@ -62,57 +120,62 @@ function CodeConfigSection() {
 }
 
 export function ConfigurationPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const tab = searchParams.get(TAB_KEY);
-  const activeTab = isValidTab(tab ?? '') ? tab : 'runpod';
-
-  const handleTabChange = (value: string | null) => {
-    if (value && isValidTab(value)) {
-      setSearchParams({ [TAB_KEY]: value });
-    }
-  };
+  const activeTab = isValidTab(tab ?? '') ? tab : 'general';
+  const { data: runpodEnabledData } = trpc.providerConfig.getRunpodManagementEnabled.useQuery();
+  const runpodManagementEnabled = runpodEnabledData?.enabled !== false;
+  const visibleSections = runpodManagementEnabled
+    ? SECTIONS
+    : SECTIONS.filter((s) => s.id !== 'runpod');
 
   return (
-    <Stack p="md" gap="md">
-      <Group justify="space-between" align="center">
-        <Text size="sm">
-          <Link to="/" style={{ color: 'var(--app-text)', textDecoration: 'none' }}>
-            ← Back to Chat
-          </Link>
-        </Text>
-      </Group>
-      <Tabs value={activeTab} onChange={handleTabChange}>
-        <Tabs.List>
-          <Tabs.Tab value="runpod">Configure RunPod</Tabs.Tab>
-          <Tabs.Tab value="vms">VMs</Tabs.Tab>
-          <Tabs.Tab value="projects">Projects</Tabs.Tab>
-          <Tabs.Tab value="providers">Providers</Tabs.Tab>
-          <Tabs.Tab value="assistants">Assistants</Tabs.Tab>
-          <Tabs.Tab value="github">GitHub</Tabs.Tab>
-          <Tabs.Tab value="code">Code</Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="runpod" pt="md">
-          <RunPodPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="vms" pt="md">
-          <VMsPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="projects" pt="md">
-          <ProjectsPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="providers" pt="md">
-          <LLMProvidersPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="assistants" pt="md">
-          <AssistantInstructionsPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="github" pt="md">
-          <GitHubConfigPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="code" pt="md">
-          <CodeConfigSection />
-        </Tabs.Panel>
-      </Tabs>
-    </Stack>
+    <Box p="md">
+      <Grid gutter="lg">
+        <Grid.Col span={{ base: 12, sm: 4, md: 3 }}>
+          <Stack gap="xs">
+            {visibleSections.map((section) => (
+              <Link
+                key={section.id}
+                to={`/config?${TAB_KEY}=${section.id}`}
+                style={{ textDecoration: 'none', color: 'inherit' }}
+              >
+                <Card
+                  withBorder
+                  padding="sm"
+                  radius="md"
+                  style={{
+                    cursor: 'pointer',
+                    backgroundColor: activeTab === section.id ? 'var(--mantine-color-default-hover)' : undefined,
+                  }}
+                >
+                  <Text fw={activeTab === section.id ? 600 : 500} size="sm">
+                    {section.label}
+                  </Text>
+                  {section.description && (
+                    <Text size="xs" c="dimmed" mt={2} lineClamp={2}>
+                      {section.description}
+                    </Text>
+                  )}
+                </Card>
+              </Link>
+            ))}
+          </Stack>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, sm: 8, md: 9 }}>
+          <Box pt={{ base: 0, sm: 0 }}>
+            {activeTab === 'general' && <GeneralSettingsSection />}
+            {activeTab === 'runpod' && runpodManagementEnabled && <RunPodPage />}
+            {activeTab === 'runpod' && !runpodManagementEnabled && <GeneralSettingsSection />}
+            {activeTab === 'vms' && <VMsPage />}
+            {activeTab === 'projects' && <ProjectsPage />}
+            {activeTab === 'providers' && <LLMProvidersPage />}
+            {activeTab === 'assistants' && <AssistantInstructionsPage />}
+            {activeTab === 'github' && <GitHubConfigPage />}
+            {activeTab === 'code' && <CodeConfigSection />}
+          </Box>
+        </Grid.Col>
+      </Grid>
+    </Box>
   );
 }
