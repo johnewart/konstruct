@@ -11,6 +11,7 @@
     "frontend": "vite",
     "agent": "node --import tsx src/agent/agent-worker.ts",
     "agent:start": "node --import tsx src/agent/agent-worker.ts",
+    "workspace-agent": "node --import tsx src/agent/workspace-agent.ts",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node --import tsx src/backend/index.ts",

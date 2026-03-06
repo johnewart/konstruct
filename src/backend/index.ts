@@ -27,6 +27,7 @@ import * as documentStore from '../shared/documentStore';
 import * as agentStream from './agentStream';
 import { handleMcpSse, handleMcpMessage } from './mcp';
 import { createLogger } from '../shared/logger';
+import * as workspaceAgentRegistry from './workspaceAgentRegistry';
 
 const log = createLogger('server');
 
@@ -198,10 +199,57 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// WebSocket /agent-stream
+// WebSocket: /agent-stream and /workspace-agent
 const wss = new WebSocketServer({ noServer: true });
+const wssWorkspaceAgent = new WebSocketServer({ noServer: true });
+
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url ?? '/', `http://localhost:${PORT}`).pathname;
+  if (pathname === '/workspace-agent') {
+    wssWorkspaceAgent.handleUpgrade(request, socket, head, (ws) => {
+      const wsWithId = ws as typeof ws & { workspaceId?: string };
+      let handleMessage: ((data: unknown) => void) | null = null;
+      ws.on('message', (raw: Buffer | string) => {
+        let data: unknown;
+        try {
+          data = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (!data || typeof data !== 'object') return;
+        const obj = data as { type?: string; workspaceId?: string; timestamp?: string; level?: string; message?: string };
+        if (obj.type === 'register' && typeof obj.workspaceId === 'string') {
+          wsWithId.workspaceId = obj.workspaceId;
+          const { connection, handleMessage: hm } = workspaceAgentRegistry.createConnection((payload) => {
+            try {
+              if (ws.readyState === 1) ws.send(JSON.stringify(payload));
+            } catch {
+              // ignore
+            }
+          });
+          handleMessage = hm;
+          workspaceAgentRegistry.register(obj.workspaceId, connection);
+          ws.on('close', () => workspaceAgentRegistry.unregister(obj.workspaceId));
+          return;
+        }
+        if (obj.type === 'log') {
+          const id = wsWithId.workspaceId ?? 'unknown';
+          const ts = typeof obj.timestamp === 'string' ? obj.timestamp : '';
+          const level = typeof obj.level === 'string' ? obj.level : 'info';
+          const msg = typeof obj.message === 'string' ? obj.message : String(obj.message);
+          const line = `[workspace-agent:${id}] ${ts} ${level}: ${msg}\n`;
+          if (level === 'error' || level === 'warn') {
+            process.stderr.write(line);
+          } else {
+            process.stdout.write(line);
+          }
+          return;
+        }
+        if (handleMessage) handleMessage(data);
+      });
+    });
+    return;
+  }
   if (pathname !== '/agent-stream') {
     socket.destroy();
     return;

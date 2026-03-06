@@ -22,14 +22,12 @@ import { getCanonicalProviderId } from '../../shared/providers';
 import type { ConfigProvider, ProviderModel } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
 import * as listProviderModels from '../services/listProviderModels';
+import { getWorkspaceByProjectId } from '../workspace/resolver';
 
 const log = createLogger('providerConfig');
 
 function getProjectPathById(projectId: string): string | null {
-  const config = loadGlobalConfig();
-  const project = config.projects?.find((p) => p.id === projectId);
-  if (!project || project.location.type !== 'local') return null;
-  return project.location.path;
+  return getWorkspaceByProjectId(projectId)?.getLocalPath() ?? null;
 }
 
 const scopeSchema = z.discriminatedUnion('type', [
@@ -279,7 +277,7 @@ export const providerConfigRouter = router({
       const projectRoot =
         input.scope.type === 'project'
           ? (getProjectPathById(input.scope.projectId) ?? '')
-          : ctx.projectRoot;
+          : ctx.workspace.getLocalPath() ?? '';
       if (input.scope.type === 'project' && !projectRoot) {
         throw new Error('Project not found or has no local path');
       }

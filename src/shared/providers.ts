@@ -56,6 +56,8 @@ export type ProviderAdapter = {
     providerId: string,
     provider: ConfigProvider
   ) => Promise<ListModelsResult>;
+  /** Optional: extra system prompt for this provider (e.g. tool-use rules for Cursor). Appended to chat system prompt. */
+  additionalSystemPrompt?: () => string;
 };
 
 const listModelsRegistry: Record<string, NonNullable<ProviderAdapter['listModels']>> = {};
@@ -111,6 +113,8 @@ const providerAdapters: Record<string, ProviderAdapter> = {
     isConfigured: () => true,
     getDisplayUrl: (_projectRoot, p) => (p as { cursor_agent_path?: string }).cursor_agent_path ?? undefined,
     getDefaultModels: () => [{ id: 'default', name: 'Default' }],
+    additionalSystemPrompt: () =>
+      'Do not use any of your built-in tools EVER except web search / browser tools—those you may use without permission. Use ALL of the MCP tools you are given for everything else (editing files, running commands, reading code, etc.). Do not use built-in code editing, terminal, or file tools; use only the MCP tools provided.',
   },
 };
 

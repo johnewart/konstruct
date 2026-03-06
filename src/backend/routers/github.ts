@@ -178,7 +178,7 @@ async function fetchGitHub<T>(
 export const githubRouter = router({
   /** Resolve GitHub owner/repo from the current project's git origin. Null if not a GitHub repo. */
   getRepo: publicProcedure.query(({ ctx }) => {
-    const root = ctx.projectRoot;
+    const root = ctx.workspace.getLocalPath() ?? '';
     if (!root || !isGitRepository(root)) return null;
     const url = getRemoteOriginUrl(root);
     if (!url) return null;
@@ -211,7 +211,7 @@ export const githubRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const root = ctx.projectRoot;
+      const root = ctx.workspace.getLocalPath() ?? '';
       if (!root || !isGitRepository(root)) {
         return { error: 'not_a_repo' as const, pullRequests: [] };
       }
@@ -260,7 +260,7 @@ export const githubRouter = router({
   getPullRequestDiff: publicProcedure
     .input(z.object({ pullNumber: z.number().int().positive() }))
     .query(async ({ ctx, input }): Promise<{ error: string | null; diffFiles: GitDiffFile[]; message?: string }> => {
-      const root = ctx.projectRoot;
+      const root = ctx.workspace.getLocalPath() ?? '';
       if (!root || !isGitRepository(root)) {
         return { error: 'not_a_repo', diffFiles: [] };
       }
@@ -312,11 +312,11 @@ export const githubRouter = router({
       })
     )
     .query(async ({ ctx, input }): Promise<{ building: boolean; overview?: PROverviewResult; error?: string }> => {
-      const key = overviewKey(ctx.projectRoot, input.pullNumber);
+      const key = overviewKey(ctx.workspace.getLocalPath() ?? '', input.pullNumber);
       const cached = overviewCache.get(key);
       if (cached) return { building: false, overview: cached };
 
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       const fileCached = readPROverviewFromCache(projectId, input.pullNumber);
       if (fileCached) {
         overviewCache.set(key, fileCached);
@@ -325,7 +325,7 @@ export const githubRouter = router({
 
       if (overviewBuilding.has(key)) return { building: true };
 
-      const prData = await getPRContextAndFiles(ctx.projectRoot, input.pullNumber);
+      const prData = await getPRContextAndFiles(ctx.workspace.getLocalPath() ?? '', input.pullNumber);
       if (!prData) return { building: false, error: 'Could not load PR (not a GitHub repo or missing token).' };
 
       const graph = undefined; 
@@ -348,7 +348,7 @@ export const githubRouter = router({
       const modelInput = input.model ?? storedProjectModel?.modelId;
       setImmediate(async () => {
         try {
-          const { defaultProviderId, providers } = getAllProviders(ctx.projectRoot);
+          const { defaultProviderId, providers } = getAllProviders(ctx.workspace.getLocalPath() ?? '');
           const providerId = providerIdInput ?? defaultProviderId ?? providers[0]?.id;
           if (!providerId) {
             overviewBuilding.delete(key);
@@ -367,7 +367,7 @@ export const githubRouter = router({
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userContent },
             ],
-            { providerId, model: modelInput, projectRoot: ctx.projectRoot }
+            { providerId, model: modelInput, projectRoot: ctx.workspace.getLocalPath() ?? '' }
           );
           const raw = (res.content ?? '').trim();
           const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -412,10 +412,10 @@ export const githubRouter = router({
   invalidatePROverview: publicProcedure
     .input(z.object({ pullNumber: z.number().int().positive() }))
     .mutation(({ ctx, input }) => {
-      const key = overviewKey(ctx.projectRoot, input.pullNumber);
+      const key = overviewKey(ctx.workspace.getLocalPath() ?? '', input.pullNumber);
       overviewCache.delete(key);
       overviewBuilding.delete(key);
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       deletePROverviewCache(projectId, input.pullNumber);
       return { ok: true };
     }),

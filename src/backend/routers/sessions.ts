@@ -38,7 +38,7 @@ const messageSchema = z.object({
 
 export const sessionsRouter = router({
   list: publicProcedure.query(({ ctx }) => {
-    const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    const projectId = ctx.workspace.id;
     const list = sessionStore.listSessions(projectId);
     log.debug('list', projectId, list.length, 'sessions');
     return list;
@@ -52,7 +52,7 @@ export const sessionsRouter = router({
       })
     )
     .mutation(({ ctx, input }) => {
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       return sessionStore.createSession(input.title ?? 'Chat', projectId, {
         ephemeral: input.ephemeral ?? false,
       });
@@ -61,7 +61,7 @@ export const sessionsRouter = router({
   get: publicProcedure
     .input(z.object({ id: z.string() }))
     .query(({ ctx, input }) => {
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       const session = sessionStore.getSession(input.id, projectId);
       if (!session) throw new Error('Session not found');
       return session;
@@ -88,7 +88,7 @@ export const sessionsRouter = router({
     .mutation(({ input }) => sessionStore.deleteSession(input.id)),
 
   deleteAll: publicProcedure.mutation(({ ctx }) => {
-    const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    const projectId = ctx.workspace.id;
     return { deleted: sessionStore.deleteAllSessions(projectId) };
   }),
 

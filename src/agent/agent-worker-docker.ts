@@ -16,10 +16,10 @@
 
 /**
  * Agent worker entry point for Docker containers
- * Connects to server via WebSocket tunnel and executes tools
+ * Connects to server via WebSocket tunnel and executes tools.
+ * TODO: Wire to workspace-agent or runLoop with workspace when Docker flow is implemented.
  */
 
-import { runAgentLoop } from './runLoop';
 import { createLogger } from '../shared/logger';
 
 const log = createLogger('agent-docker');
@@ -42,31 +42,20 @@ function getAgentConfig(): AgentConfig {
 }
 
 /**
- * Connect to server via WebSocket tunnel
+ * Connect to server via WebSocket tunnel. Docker agent flow not yet wired to runLoop/workspace.
  */
 async function connectToServer(config: AgentConfig): Promise<void> {
   const { serverUrl, agentId, tunnelId } = config;
 
   log.info(`Connecting to server at ${serverUrl} as agent ${agentId}`);
 
-  // In Docker, we'll use a simulated connection for now
-  // In production, this would connect via the actual WebSocket tunnel
   if (!tunnelId) {
     log.warn('No tunnel ID provided, running in local mode');
   }
 
-  // Start the agent loop
-  try {
-    await runAgentLoop({
-      serverUrl,
-      agentId,
-      authKey: config.authKey,
-      mode: 'docker',
-    });
-  } catch (error) {
-    log.error(`Agent loop error: ${error}`);
-    process.exit(1);
-  }
+  // Docker agent: use workspace-agent.ts to register as workspace agent and run tools.
+  // This entrypoint is a stub until the Docker flow is fully implemented.
+  log.info('Docker agent stub: run workspace-agent for tool execution.');
 }
 
 /**

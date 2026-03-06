@@ -349,8 +349,8 @@ export const codebaseRouter = router({
     .input(z.object({ path: z.string().optional() }).optional())
     .query(({ ctx, input }) => {
       const pathArg = input?.path?.trim() || '.';
-      const key = fullGraphKey(ctx.projectRoot);
-      const stripPrefix = getStripPrefix(ctx.projectRoot);
+      const key = fullGraphKey(ctx.workspace.getLocalPath() ?? '');
+      const stripPrefix = getStripPrefix(ctx.workspace.getLocalPath() ?? '');
 
       // ── Serve from cache if fresh (path is only for filtering the view) ──
       const cached = graphCache.get(key);
@@ -373,7 +373,7 @@ export const codebaseRouter = router({
       if (cached) graphCache.delete(key);
 
       // ── Load from disk (persisted cache) so we don't re-process unless user clicked Rebuild ──
-      const diskCache = loadGraphCacheFromDisk(ctx.projectRoot);
+      const diskCache = loadGraphCacheFromDisk(ctx.workspace.getLocalPath() ?? '');
       if (diskCache) {
         const restored: CachedGraph = { ...diskCache, cachedAt: Date.now() };
         graphCache.set(key, restored);
@@ -452,7 +452,7 @@ export const codebaseRouter = router({
         currentDir:     undefined,
       });
 
-      spawnAnalysisWorker(key, ctx.projectRoot, stripPrefix);
+      spawnAnalysisWorker(key, ctx.workspace.getLocalPath() ?? '', stripPrefix);
 
       return {
         error: null,
@@ -475,10 +475,10 @@ export const codebaseRouter = router({
   invalidateDependencyGraph: publicProcedure
     .input(z.object({ path: z.string().optional() }).optional())
     .mutation(({ ctx }) => {
-      const key = fullGraphKey(ctx.projectRoot);
+      const key = fullGraphKey(ctx.workspace.getLocalPath() ?? '');
       graphCache.delete(key);
       invalidatedKeys.add(key);
-      deleteGraphCacheFromDisk(ctx.projectRoot);
+      deleteGraphCacheFromDisk(ctx.workspace.getLocalPath() ?? '');
       if (currentBuildKey !== key) {
         buildStateMap.delete(key);
       }
@@ -498,7 +498,7 @@ export const codebaseRouter = router({
       }),
     )
     .query(({ ctx, input }) => {
-      const key = fullGraphKey(ctx.projectRoot);
+      const key = fullGraphKey(ctx.workspace.getLocalPath() ?? '');
       const cached = graphCache.get(key);
       if (!cached || Date.now() - cached.cachedAt > CACHE_TTL_MS) {
         return { dependsOn: [] as string[], dependedOnBy: [] as string[], notReady: true };
@@ -536,8 +536,8 @@ export const codebaseRouter = router({
       if (!relPath || relPath.startsWith('..')) {
         return { content: null, error: 'Invalid path' };
       }
-      const fullPath = path.resolve(ctx.projectRoot, relPath);
-      const projectRootNorm = path.resolve(ctx.projectRoot);
+      const fullPath = path.resolve(ctx.workspace.getLocalPath() ?? '', relPath);
+      const projectRootNorm = path.resolve(ctx.workspace.getLocalPath() ?? '');
       if (!fullPath.startsWith(projectRootNorm + path.sep) && fullPath !== projectRootNorm) {
         return { content: null, error: 'Path is outside project' };
       }

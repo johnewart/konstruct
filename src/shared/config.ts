@@ -27,15 +27,18 @@ import { createLogger } from './logger.ts';
 
 const log = createLogger('config');
 
-/** Known project: name, git URL, and where to find it (local path or VM). */
+/** Project location: local path, VM, or container. */
+export type ProjectLocation =
+  | { type: 'local'; path: string }
+  | { type: 'vm'; vmId: string }
+  | { type: 'container'; containerId: string };
+
+/** Known project: name, git URL, and where to find it (local path or VM/container). */
 export type KonstructProject = {
   id: string;
   name: string;
   gitRepositoryUrl: string;
-  location: {
-    type: 'local';
-    path: string;
-  };
+  location: ProjectLocation;
 };
 
 /** Per-provider model: name and optional context window (for max_tokens). */
@@ -328,14 +331,17 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
         const pathVal = (loc?.path ?? '') as string;
         const name = String(p?.name ?? '');
         const id = (String(p?.id ?? '').trim() || `project-${index}`);
+        const location: ProjectLocation =
+          type === 'vm'
+            ? { type: 'vm', vmId: String(loc?.vmId ?? '') }
+            : type === 'container'
+              ? { type: 'container', containerId: String(loc?.containerId ?? '') }
+              : { type: 'local', path: pathVal };
         return {
           id,
           name,
           gitRepositoryUrl: String(p?.gitRepositoryUrl ?? p?.git_repository_url ?? ''),
-          location: {
-            type: type === 'local' ? 'local' : 'local',
-            path: pathVal,
-          },
+          location,
         } as KonstructProject;
       }).filter((proj) => proj.name || proj.gitRepositoryUrl);
     })(),

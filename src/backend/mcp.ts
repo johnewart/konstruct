@@ -34,10 +34,11 @@
  *   X-Agent-Name    - agent preset name; when set, only tools for that preset are exposed. Presets: "minimal" (read-only: list_files, read_file_region, grep, glob, codebase_outline, search_code), "full" (all tools). Use "${env:KONSTRUCT_AGENT_NAME}" in mcp.json so Cursor sends the env value.
  */
 
-import '../agent/tools/runners.ts'; // register all tool implementations
-import { executeTool } from '../agent/tools/executor.ts';
 import { getToolsForMode } from '../agent/toolDefinitions.ts';
 import type { ToolDefinition } from '../shared/llm.ts';
+import { isBackendTool } from '../shared/toolClassification.ts';
+import { runBackendTool } from './mcp/backendTools.ts';
+import { getWorkspaceByProjectRoot } from './workspace/resolver.ts';
 import * as http from 'node:http';
 import { createLogger } from '../shared/logger.ts';
 
@@ -134,14 +135,22 @@ async function dispatchRequest(
         respondError(-32602, `Tool "${p.name}" is not allowed in this session`);
         return;
       }
-      log.debug('mcp tools/call', p.name, 'project:', session.projectRoot);
+      log.debug('mcp tools/call', p.name, 'project:', session.projectRoot, 'backend:', isBackendTool(p.name));
       try {
-        const result = await executeTool(p.name, p.arguments ?? {}, {
-          projectRoot: session.projectRoot,
-          sessionId: session.konstructSessionId,
-        });
-        const text = result.error ?? result.result ?? '';
-        respond({ content: [{ type: 'text', text }], isError: !!result.error });
+        if (isBackendTool(p.name)) {
+          const result = runBackendTool(p.name, p.arguments ?? {}, {
+            projectRoot: session.projectRoot,
+            sessionId: session.konstructSessionId,
+          });
+          const text = result.error ?? result.result ?? '';
+          respond({ content: [{ type: 'text', text }], isError: !!result.error });
+        } else {
+          const workspace = getWorkspaceByProjectRoot(session.projectRoot);
+          const conn = await workspace.getOrSpawnAgent();
+          const result = await conn.executeTool(p.name, p.arguments ?? {});
+          const text = result.error ?? result.result ?? '';
+          respond({ content: [{ type: 'text', text }], isError: !!result.error });
+        }
       } catch (err) {
         respond({ content: [{ type: 'text', text: String(err) }], isError: true });
       }

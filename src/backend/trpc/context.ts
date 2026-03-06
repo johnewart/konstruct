@@ -14,13 +14,11 @@
  * limitations under the License.
  */
 
-import {
-  getActiveProjectRootFresh,
-  getProjectRootById,
-} from '../../shared/config';
+import type { Workspace } from '../../shared/workspace';
+import { getWorkspaceByProjectId, getActiveWorkspace } from '../workspace/resolver';
 
 export type AppContext = {
-  projectRoot: string;
+  workspace: Workspace;
 };
 
 /** Options passed by the fetch adapter (req may be undefined for non-fetch). */
@@ -30,12 +28,9 @@ export const createContext = async (
   opts?: CreateContextOptions
 ): Promise<AppContext> => {
   const projectId = opts?.req?.headers?.get?.('X-Active-Project-Id')?.trim();
-  let projectRoot: string | null =
-    projectId ? getProjectRootById(projectId) : null;
-  if (!projectRoot) projectRoot = getActiveProjectRootFresh();
-  const root =
-    projectRoot ?? process.env.PROJECT_ROOT ?? process.cwd();
-  return { projectRoot: root };
+  const workspace =
+    projectId ? getWorkspaceByProjectId(projectId) : null ?? getActiveWorkspace();
+  return { workspace };
 };
 
 export type Context = Awaited<ReturnType<typeof createContext>>;

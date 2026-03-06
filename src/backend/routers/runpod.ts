@@ -100,18 +100,18 @@ export const runpodRouter = router({
     ),
 
   getDefaultRunpodPod: publicProcedure.query(({ ctx }) => ({
-    defaultPodId: runpodProject.getDefaultPodId(ctx.projectRoot),
+    defaultPodId: runpodProject.getDefaultPodId(ctx.workspace.getLocalPath() ?? ''),
   })),
 
   setDefaultRunpodPod: publicProcedure
     .input(z.object({ podId: z.string().nullable() }))
     .mutation(({ ctx, input }) => {
-      runpodProject.setDefaultPodId(ctx.projectRoot, input.podId);
+      runpodProject.setDefaultPodId(ctx.workspace.getLocalPath() ?? '', input.podId);
       return { ok: true };
     }),
 
   getRunpodModelSettings: publicProcedure.query(({ ctx }) =>
-    runpodModelSettings.getRunpodModelSettings(ctx.projectRoot)
+    runpodModelSettings.getRunpodModelSettings(ctx.workspace.getLocalPath() ?? '')
   ),
 
   setRunpodModelSettings: publicProcedure
@@ -139,7 +139,7 @@ export const runpodRouter = router({
     )
     .mutation(({ ctx, input }) => {
       runpodModelSettings.setRunpodModelSettings(
-        ctx.projectRoot,
+        ctx.workspace.getLocalPath() ?? '',
         input.modelId,
         input.settings
       );
@@ -147,7 +147,7 @@ export const runpodRouter = router({
     }),
 
   getRunpodTemplates: publicProcedure.query(({ ctx }) =>
-    runpodTemplates.getRunpodTemplates(ctx.projectRoot)
+    runpodTemplates.getRunpodTemplates(ctx.workspace.getLocalPath() ?? '')
   ),
 
   saveRunpodTemplate: publicProcedure
@@ -159,7 +159,7 @@ export const runpodRouter = router({
       })
     )
     .mutation(({ ctx, input }) => {
-      return runpodTemplates.saveRunpodTemplate(ctx.projectRoot, {
+      return runpodTemplates.saveRunpodTemplate(ctx.workspace.getLocalPath() ?? '', {
         name: input.name,
         podConfig: input.podConfig,
         estimatedCostPerHour: input.estimatedCostPerHour,
@@ -169,14 +169,14 @@ export const runpodRouter = router({
   deleteRunpodTemplate: publicProcedure
     .input(z.object({ templateId: z.string().min(1) }))
     .mutation(({ ctx, input }) => {
-      runpodTemplates.deleteRunpodTemplate(ctx.projectRoot, input.templateId);
+      runpodTemplates.deleteRunpodTemplate(ctx.workspace.getLocalPath() ?? '', input.templateId);
       return { ok: true };
     }),
 
   launchRunpodTemplate: publicProcedure
     .input(configSchema.and(z.object({ templateId: z.string().min(1) })))
     .mutation(async ({ ctx, input }) => {
-      const templates = runpodTemplates.getRunpodTemplates(ctx.projectRoot);
+      const templates = runpodTemplates.getRunpodTemplates(ctx.workspace.getLocalPath() ?? '');
       const template = templates.find((t) => t.id === input.templateId);
       if (!template) return { success: false, error: 'Template not found' };
       const { templateId, ...config } = input;
@@ -187,7 +187,7 @@ export const runpodRouter = router({
       const result = await runpod.createPod(config, podConfig);
       if (result.success && result.pod?.id) {
         runpodTemplates.setTemplateLaunchedPodId(
-          ctx.projectRoot,
+          ctx.workspace.getLocalPath() ?? '',
           templateId,
           result.pod.id
         );
@@ -198,14 +198,14 @@ export const runpodRouter = router({
   stopRunpodTemplate: publicProcedure
     .input(configSchema.and(z.object({ templateId: z.string().min(1) })))
     .mutation(async ({ ctx, input }) => {
-      const templates = runpodTemplates.getRunpodTemplates(ctx.projectRoot);
+      const templates = runpodTemplates.getRunpodTemplates(ctx.workspace.getLocalPath() ?? '');
       const template = templates.find((t) => t.id === input.templateId);
       if (!template?.launchedPodId) return { success: true };
       const { templateId, ...config } = input;
       const result = await runpod.stopPod(config, template.launchedPodId);
       if (result.success) {
         runpodTemplates.setTemplateLaunchedPodId(
-          ctx.projectRoot,
+          ctx.workspace.getLocalPath() ?? '',
           templateId,
           null
         );

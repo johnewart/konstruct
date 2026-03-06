@@ -100,14 +100,14 @@ export const chatRouter = router({
     }),
 
   listProviders: publicProcedure.query(({ ctx }) =>
-    getAllProviders(ctx.projectRoot)
+    getAllProviders(ctx.workspace.getLocalPath() ?? '')
   ),
 
   setDefaultProvider: publicProcedure
     .input(z.object({ providerId: z.string() }))
     .mutation(({ ctx, input }) => {
       // Validate provider exists
-      const providers = getAllProviders(ctx.projectRoot);
+      const providers = getAllProviders(ctx.workspace.getLocalPath() ?? '');
       const provider = providers.providers.find((p) => p.id === input.providerId);
       
       if (!provider) {
@@ -133,7 +133,7 @@ export const chatRouter = router({
     }),
 
   listPlans: publicProcedure.query(({ ctx }) => {
-    const dir = path.join(ctx.projectRoot, PLANS_DIR);
+    const dir = path.join(ctx.workspace.getLocalPath() ?? '', PLANS_DIR);
     if (!fs.existsSync(dir)) return [];
     const names = fs.readdirSync(dir, { withFileTypes: true });
     const filtered = names.filter((e) => e.isFile() && !e.name.startsWith('.'));
@@ -167,7 +167,7 @@ export const chatRouter = router({
       })
     )
     .query(({ ctx, input }) => {
-      const dir = path.resolve(ctx.projectRoot, PLANS_DIR);
+      const dir = path.resolve(ctx.workspace.getLocalPath() ?? '', PLANS_DIR);
       const fullPath = path.join(dir, input.name);
       const resolved = path.resolve(fullPath);
       if (!resolved.startsWith(dir) || !fs.existsSync(resolved))
@@ -176,7 +176,7 @@ export const chatRouter = router({
     }),
 
   listRules: publicProcedure.query(({ ctx }) => {
-    const dir = path.join(ctx.projectRoot, RULES_DIR);
+    const dir = path.join(ctx.workspace.getLocalPath() ?? '', RULES_DIR);
     if (!fs.existsSync(dir)) return [];
     const names = fs.readdirSync(dir, { withFileTypes: true });
     return names
@@ -188,7 +188,7 @@ export const chatRouter = router({
   getRuleContent: publicProcedure
     .input(z.object({ name: z.string().refine(isSafeRuleName) }))
     .query(({ ctx, input }) => {
-      const dir = path.resolve(ctx.projectRoot, RULES_DIR);
+      const dir = path.resolve(ctx.workspace.getLocalPath() ?? '', RULES_DIR);
       const fullPath = path.join(dir, input.name);
       const resolved = path.resolve(fullPath);
       if (!resolved.startsWith(dir) || !fs.existsSync(resolved))
@@ -201,7 +201,7 @@ export const chatRouter = router({
       z.object({ name: z.string().refine(isSafeRuleName), content: z.string() })
     )
     .mutation(({ ctx, input }) => {
-      const dir = path.resolve(ctx.projectRoot, RULES_DIR);
+      const dir = path.resolve(ctx.workspace.getLocalPath() ?? '', RULES_DIR);
       const fullPath = path.join(dir, input.name);
       const resolved = path.resolve(fullPath);
       if (!resolved.startsWith(dir)) throw new Error('Invalid path');
@@ -247,14 +247,14 @@ export const chatRouter = router({
       })
     )
     .query(({ input, ctx }) => {
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       const session = sessionStore.getSession(input.sessionId, projectId);
       if (!session) throw new Error('Session not found');
       const modeId = input.modeId ?? 'implementation';
       const mode = getMode(modeId);
       let systemPrompt =
         mode?.systemPrompt ?? getMode('implementation')!.systemPrompt;
-      const combinedRules = getCombinedRules(ctx.projectRoot);
+      const combinedRules = getCombinedRules(ctx.workspace.getLocalPath() ?? '');
       if (combinedRules) systemPrompt = systemPrompt + '\n\n' + combinedRules;
       const extendedInstructions = getModeInstructions(modeId);
       if (extendedInstructions) systemPrompt = systemPrompt + '\n\n' + extendedInstructions;
@@ -315,14 +315,14 @@ export const chatRouter = router({
       if (input.prContext) {
         const { getPRContextForAgent } = await import('./github');
         try {
-          prContextText = await getPRContextForAgent(ctx.projectRoot, input.prContext.pullNumber);
+          prContextText = await getPRContextForAgent(ctx.workspace.getLocalPath() ?? '', input.prContext.pullNumber);
         } catch (err) {
           console.warn('[chat] getPRContextForAgent failed for PR', input.prContext.pullNumber, err);
           prContextText = '';
         }
       }
 
-      const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+      const projectId = ctx.workspace.id;
       const storedProjectModel = projectId ? getProjectModel(projectId) : undefined;
       const effectiveProviderId = input.providerId ?? storedProjectModel?.providerId;
       const effectiveModelId = input.model ?? storedProjectModel?.modelId;
@@ -337,7 +337,7 @@ export const chatRouter = router({
             modeId: input.modeId,
             providerId: effectiveProviderId,
             model: effectiveModelId,
-            projectRoot: ctx.projectRoot,
+            projectRoot: ctx.workspace.getLocalPath() ?? '',
             ...(prContextText ? { prContextText } : {}),
           }),
         });
@@ -354,7 +354,7 @@ export const chatRouter = router({
       inProcessAbortControllers.set(input.sessionId, controller);
       try {
         const session = await runAgentLoop({
-          projectRoot: ctx.projectRoot,
+          workspace: ctx.workspace,
           sessionId: input.sessionId,
           content: input.content,
           modeId: input.modeId,

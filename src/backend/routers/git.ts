@@ -18,8 +18,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
-import { getChangedFiles, getComprehensiveDiffStats, isGitAvailable, getGitDiff, getStagedFilePaths } from '../git';
-import type { GitDiffFile } from '../git';
+import { isGitAvailable } from '../git';
+import type { GitDiffFile, GitFileChange } from '../git';
 import { getGlobalConfigDir, getProjectModel } from '../../shared/config';
 import * as sessionStore from '../../shared/sessionStore';
 // import { getCachedDependencyGraph } from './codebase';
@@ -88,8 +88,8 @@ function findJsonObjectEnd(raw: string, start: number): number {
 const diffOverviewCache = new Map<string, DiffOverviewResult>();
 const diffOverviewBuilding = new Set<string>();
 
-function diffOverviewKey(projectRoot: string): string {
-  return projectRoot;
+function diffOverviewKey(workspaceId: string): string {
+  return workspaceId;
 }
 
 /** Normalize path for staged-vs-unstaged comparison (slash, trim, no leading ./). */
@@ -255,28 +255,42 @@ function buildDiffContextText(diffFiles: GitDiffFile[]): string {
 export const gitRouter = router({
   isAvailable: publicProcedure.query(() => isGitAvailable()),
 
-  getChangedFiles: publicProcedure.query(({ ctx }) => {
-    const changes = getChangedFiles(ctx.projectRoot);
-
-    if (changes.length === 0) {
+  getChangedFiles: publicProcedure.query(async ({ ctx }) => {
+    const conn = await ctx.workspace.getOrSpawnAgent();
+    const out = await conn.executeTool('getChangedFiles', {});
+    if (out.error) return [] as const;
+    let changes: GitFileChange[] = [];
+    try {
+      changes = JSON.parse(out.result ?? '[]') as GitFileChange[];
+    } catch {
       return [] as const;
     }
-
-    // Get comprehensive diff stats for all changed files
-    const stats = getComprehensiveDiffStats(ctx.projectRoot);
-
+    if (changes.length === 0) return [] as const;
+    const statsOut = await conn.executeTool('getComprehensiveDiffStats', {});
+    let stats = new Map<string, { added: number; removed: number }>();
+    if (!statsOut.error && statsOut.result) {
+      try {
+        const obj = JSON.parse(statsOut.result) as Record<string, { added: number; removed: number }>;
+        stats = new Map(Object.entries(obj));
+      } catch {
+        // ignore
+      }
+    }
     return changes.map((change) => {
       const fileStats = stats.get(change.path) || { added: 0, removed: 0 };
-      return {
-        ...change,
-        added: fileStats.added,
-        removed: fileStats.removed,
-      };
+      return { ...change, added: fileStats.added, removed: fileStats.removed };
     });
   }),
 
-  getGitDiff: publicProcedure.query(({ ctx }) => {
-    return getGitDiff(ctx.projectRoot);
+  getGitDiff: publicProcedure.query(async ({ ctx }) => {
+    const conn = await ctx.workspace.getOrSpawnAgent();
+    const out = await conn.executeTool('getGitDiff', {});
+    if (out.error) return [];
+    try {
+      return JSON.parse(out.result ?? '[]') as GitDiffFile[];
+    } catch {
+      return [];
+    }
   }),
 
   /**
@@ -299,25 +313,33 @@ export const gitRouter = router({
         ctx,
         input,
       }): Promise<{ building: boolean; overview?: DiffOverviewResult; error?: string; progressId?: string }> => {
-        const key = diffOverviewKey(ctx.projectRoot);
+        const key = diffOverviewKey(ctx.workspace.id);
         const cached = diffOverviewCache.get(key);
         if (cached) return { building: false, overview: cached };
 
-        const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+        const projectId = ctx.workspace.id;
         const fileCached = readDiffOverviewFromCache(projectId);
         if (fileCached) {
           diffOverviewCache.set(key, fileCached);
           return { building: false, overview: fileCached };
         }
 
-        const diffFiles = getGitDiff(ctx.projectRoot);
+        const conn = await ctx.workspace.getOrSpawnAgent();
+        const out = await conn.executeTool('getGitDiff', {});
+        if (out.error) return { building: false, error: out.error };
+        let diffFiles: GitDiffFile[] = [];
+        try {
+          diffFiles = JSON.parse(out.result ?? '[]') as GitDiffFile[];
+        } catch {
+          return { building: false, error: 'Failed to parse getGitDiff result' };
+        }
         if (diffFiles.length === 0) return { building: false, error: 'No local changes.' };
 
         const progressId = `diff-overview:${projectId}`;
         if (diffOverviewBuilding.has(key)) return { building: true, progressId };
         diffOverviewBuilding.add(key);
 
-        const graph = undefined; // getCachedDependencyGraph(ctx.projectRoot, '.');
+        const graph = undefined;
         const diffFileList = diffFiles.map((f) => ({ path: f.path.replace(/\\/g, '/').trim(), status: f.status }));
         const pathsUntracked = diffFileList.filter((f) => f.status === '??').map((f) => f.path);
         const trackedSet = new Set(
@@ -346,7 +368,7 @@ export const gitRouter = router({
             pending: true,
           });
           try {
-            const { defaultProviderId, providers } = getAllProviders(ctx.projectRoot);
+            const { defaultProviderId, providers } = getAllProviders(ctx.workspace.getLocalPath() ?? '');
             const providerId = providerIdInput ?? defaultProviderId ?? providers[0]?.id;
             if (!providerId) {
               runProgressStore.clearProgress(progressId);
@@ -391,7 +413,7 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
             {
               providerId,
               model: modelInput,
-              projectRoot: ctx.projectRoot,
+              projectRoot: ctx.workspace.getLocalPath() ?? '',
               sessionId: progressId,
               progressStore: runProgressStore,
             }
@@ -480,10 +502,10 @@ Provide the analytical "review", the "confidence" breakdown with evidence for ea
 
   /** Clear cached diff overview so the next getDiffOverview will run the reviewer again (e.g. when user clicks "Analyze"). */
   invalidateDiffOverview: publicProcedure.mutation(({ ctx }) => {
-    const key = diffOverviewKey(ctx.projectRoot);
+    const key = diffOverviewKey(ctx.workspace.id);
     diffOverviewCache.delete(key);
     diffOverviewBuilding.delete(key);
-    const projectId = sessionStore.resolveProjectId(ctx.projectRoot);
+    const projectId = ctx.workspace.id;
     runProgressStore.clearProgress(`diff-overview:${projectId}`);
     deleteDiffOverviewCache(projectId);
     return { ok: true };

@@ -23,7 +23,7 @@ const projectToSessionId = new Map<string, string>();
 
 export const reviewRouter = router({
   getOrCreateSession: publicProcedure.query(({ ctx }) => {
-    const projectRoot = ctx.projectRoot;
+    const projectRoot = ctx.workspace.getLocalPath() ?? '';
     if (!isGitRepository(projectRoot)) {
       return null;
     }
@@ -38,9 +38,9 @@ export const reviewRouter = router({
     return reviewSessionManager.getSession(sessionId) ?? null;
   }),
 
-  /** Start a new review session for the current project (ctx.projectRoot). */
+  /** Start a new review session for the current project (ctx.workspace.getLocalPath() ?? ''). */
   startReviewSession: publicProcedure.mutation(({ ctx }) => {
-    const projectRoot = ctx.projectRoot;
+    const projectRoot = ctx.workspace.getLocalPath() ?? '';
     if (!isGitRepository(projectRoot)) {
       throw new Error('Current project is not a git repository. Cannot start a review session.');
     }

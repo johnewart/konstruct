@@ -22,8 +22,12 @@ import * as llm from '../shared/llm';
 import { executeTool } from './tools/executor';
 import './tools/runners';
 import { getToolsForMode } from './toolDefinitions';
+import { isBackendTool } from '../shared/toolClassification';
+import { runBackendTool } from '../backend/mcp/backendTools';
+import type { Workspace } from '../shared/workspace';
 import { getMode } from './modes';
-import { getModeInstructions } from '../shared/config';
+import { loadConfig, getProviderById, getModeInstructions } from '../shared/config';
+import { getProviderAdapter } from '../shared/providers';
 import { createLogger } from '../shared/logger';
 import { analyzeConversationPattern } from './supervisor';
 import { SdkAbortWithHistoryError, type ToolCallHistoryEntry } from './claude-sdk-agent';
@@ -114,7 +118,7 @@ export interface RunProgressStore {
 }
 
 export interface RunAgentLoopInput {
-  projectRoot: string;
+  workspace: Workspace;
   sessionId: string;
   content: string;
   modeId?: string;
@@ -134,7 +138,7 @@ export async function runAgentLoop(
   input: RunAgentLoopInput
 ): Promise<sessionStore.Session> {
   const {
-    projectRoot,
+    workspace,
     sessionId,
     content,
     modeId: modeIdOpt,
@@ -145,11 +149,12 @@ export async function runAgentLoop(
     prContextText,
   } = input;
   const modeId = modeIdOpt ?? 'implementation';
+  const projectRoot = workspace.getLocalPath() ?? '';
+  const projectId = workspace.id;
 
   progressStore.clearProgress(sessionId);
   progressStore.setRunning(sessionId, true);
   try {
-    const projectId = sessionStore.resolveProjectId(projectRoot);
     const session = sessionStore.getSession(sessionId, projectId);
     if (!session) {
       throw new Error(
@@ -170,6 +175,16 @@ export async function runAgentLoop(
         '\n\n## Pull request context (for reference)\n\nThe following is the **proposed** PR (diff). Added (A) files are not in the repo yet; their content is only in this section.\n\n' +
         prContextText;
     }
+    const providerType =
+      providerId && projectRoot
+        ? (() => {
+            const config = loadConfig(projectRoot);
+            const provider = getProviderById(config, providerId);
+            return (provider?.type ?? providerId).toLowerCase();
+          })()
+        : (providerId ?? '').toLowerCase();
+    const additionalPrompt = providerType ? getProviderAdapter(providerType).additionalSystemPrompt?.() ?? '' : '';
+    if (additionalPrompt) systemPrompt = systemPrompt + '\n\n' + additionalPrompt;
     const tools = getToolsForMode(modeId);
     log.debug(
       'runLoop',
@@ -346,10 +361,17 @@ export async function runAgentLoop(
               pending: true,
             });
           }
-          const result = await executeTool(toolName, args, {
-            sessionId,
-            projectRoot,
-          });
+          let result;
+          if (isBackendTool(toolName)) {
+            result = runBackendTool(toolName, args, {
+              projectRoot,
+              sessionId,
+              progressStore,
+            });
+          } else {
+            const conn = await workspace.getOrSpawnAgent();
+            result = await conn.executeTool(toolName, args);
+          }
           let resultContent = result.error ?? result.result ?? '';
           const maxToolResultChars = 28 * 1024;
           if (resultContent.length > maxToolResultChars) {

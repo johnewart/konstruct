@@ -202,8 +202,9 @@ const server = http.createServer(async (req, res) => {
       const progressStore = createProgressStore((sid, payload) =>
         sendProgressToServer(sid, payload)
       );
+      const { getWorkspaceByProjectRoot } = await import('../backend/workspace/resolver');
       void runAgentLoop({
-        projectRoot: runProjectRoot,
+        workspace: getWorkspaceByProjectRoot(runProjectRoot),
         sessionId,
         content: body.content,
         modeId: body.modeId,
