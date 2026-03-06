@@ -86,6 +86,8 @@ export type KonstructConfig = {
   plugins?: { enabled?: string[] };
   /** Per-workspace plugin settings: projectId -> pluginId -> settings object. */
   pluginSettings?: Record<string, Record<string, Record<string, unknown>>>;
+  /** Global plugin config blobs: pluginId -> config object. Written by the settings UI; read by backend plugin code. */
+  pluginConfig?: Record<string, Record<string, unknown>>;
   /** Provider list: id, name, type, secret_ref, and type-specific options. */
   providers?: ConfigProvider[];
   /** Known projects (global config only): name, git URL, location (local path or VM). */
@@ -111,6 +113,8 @@ export type KonstructConfig = {
   modeInstructions?: Record<string, string>;
   /** Per-project provider/model selection (set from UI top bar). Used when client does not send providerId/model. */
   projectModels?: Record<string, { providerId: string; modelId: string }>;
+  /** Per-project disabled tool names. projectId → list of tool names the agent may NOT call. */
+  disabledTools?: Record<string, string[]>;
 };
 
 const defaultConfig: KonstructConfig = {};
@@ -279,6 +283,15 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
     vmManagementEnabled,
     plugins: pluginsEnabled?.length ? { enabled: pluginsEnabled } : undefined,
     pluginSettings,
+    pluginConfig: (() => {
+      const pc = raw.pluginConfig;
+      if (!pc || typeof pc !== 'object' || Array.isArray(pc)) return undefined;
+      const out: Record<string, Record<string, unknown>> = {};
+      for (const [pluginId, blob] of Object.entries(pc)) {
+        if (blob != null && typeof blob === 'object' && !Array.isArray(blob)) out[pluginId] = blob as Record<string, unknown>;
+      }
+      return Object.keys(out).length ? out : undefined;
+    })(),
     providers: providersList,
     runpod: raw.runpod as KonstructConfig['runpod'],
     github: (() => {
@@ -318,6 +331,18 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
           const providerId = String((v as { providerId?: string }).providerId ?? '').trim();
           const modelId = String((v as { modelId?: string }).modelId ?? '').trim();
           if (providerId && modelId) out[String(k)] = { providerId, modelId };
+        }
+      }
+      return Object.keys(out).length ? out : undefined;
+    })(),
+    disabledTools: (() => {
+      const dt = raw.disabledTools ?? raw.disabled_tools;
+      if (!dt || typeof dt !== 'object' || Array.isArray(dt)) return undefined;
+      const out: Record<string, string[]> = {};
+      for (const [projectId, names] of Object.entries(dt)) {
+        if (Array.isArray(names)) {
+          const filtered = names.filter((n): n is string => typeof n === 'string' && n.trim().length > 0).map((n) => n.trim());
+          if (filtered.length > 0) out[String(projectId)] = filtered;
         }
       }
       return Object.keys(out).length ? out : undefined;
@@ -463,6 +488,26 @@ export function getActiveProjectRoot(): string | null {
   const project = config.projects?.find((p) => p.id === id);
   if (!project || project.location.type !== 'local') return null;
   return path.resolve(project.location.path);
+}
+
+/** Get the list of disabled tool names for a project. Returns empty array if none set. */
+export function getDisabledToolsForProject(projectId: string): string[] {
+  const config = loadGlobalConfig();
+  return config.disabledTools?.[projectId] ?? [];
+}
+
+/** Set the disabled tool names for a project (replaces any existing list). Pass empty array to clear. */
+export function setDisabledToolsForProject(projectId: string, toolNames: string[]): void {
+  const config = loadGlobalConfig();
+  const next = { ...(config.disabledTools ?? {}) };
+  const filtered = toolNames.filter((n) => typeof n === 'string' && n.trim().length > 0).map((n) => n.trim());
+  if (filtered.length > 0) {
+    next[projectId] = filtered;
+  } else {
+    delete next[projectId];
+  }
+  config.disabledTools = Object.keys(next).length ? next : undefined;
+  saveGlobalConfig(config);
 }
 
 /**

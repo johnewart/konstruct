@@ -197,7 +197,7 @@ const CHAT_HANDLERS: Record<string, ChatHandler> = {
   },
   cursor: async (messages, options, providerId, projectRoot, provider) => {
     log.debug('cursor provider: projectRoot', projectRoot ?? '(empty)');
-    if (projectRoot) ensureCursorMcpConfig(projectRoot);
+    if (projectRoot) await ensureCursorMcpConfig(projectRoot);
     const prompt = buildMessagesPrompt(messages);
     const cursorPath = getCursorAgentPath(projectRoot, providerId);
     const model = options.model ?? provider?.default_model ?? undefined;

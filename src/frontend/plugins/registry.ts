@@ -32,16 +32,32 @@ export interface PluginViewMeta {
 export interface PluginSettingsProps {
   pluginId: string;
   projectId: string;
+  /** Per-workspace settings blob (less common — prefer pluginConfig for credentials). */
   settings: Record<string, unknown>;
+  /** Global plugin config blob (credentials, endpoints, etc.). */
+  pluginConfig: Record<string, unknown>;
+  /** Save per-workspace settings. */
   onSave: (settings: Record<string, unknown>) => void;
+  /** Save global plugin config (credentials, endpoints). This is what the backend reads. */
+  onSaveConfig: (config: Record<string, unknown>) => void;
 }
 
 /**
- * Load settings by convention: konstruct-plugin-<id>/settings (default export).
- * No registry entry needed. If the plugin has no ./settings module, the import will fail.
+ * Auto-discovered settings panels for all plugins.
+ * Vite evaluates this glob at build time — any new `packages/konstruct-plugin-X/settings.mjs`
+ * is picked up automatically without any manual registry entry.
+ */
+const settingsModules = import.meta.glob<{ default: ComponentType<PluginSettingsProps> }>(
+  '../../../packages/konstruct-plugin-*/settings.mjs'
+);
+
+/**
+ * Returns the settings panel loader for a given plugin id, or null if the
+ * plugin has no settings panel.
  */
 export function getPluginSettingsLoader(
   pluginId: string
-): () => Promise<{ default: ComponentType<PluginSettingsProps> }> {
-  return () => import(/* @vite-ignore */ `konstruct-plugin-${pluginId}/settings`);
+): (() => Promise<{ default: ComponentType<PluginSettingsProps> }>) | null {
+  const key = `../../../packages/konstruct-plugin-${pluginId}/settings.mjs`;
+  return settingsModules[key] ?? null;
 }

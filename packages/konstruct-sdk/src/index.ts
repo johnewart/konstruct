@@ -57,6 +57,20 @@ export interface KonstructPluginConfig {
   [key: string]: unknown;
 }
 
+/**
+ * tRPC helpers exposed to plugins so they can create and register tRPC routers.
+ * `router` is the tRPC router factory, `procedure` is the base public procedure
+ * builder, and `z` is the Zod schema library for input validation.
+ */
+export interface PluginTrpc {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  router: (routes: Record<string, any>) => unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  procedure: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  z: any;
+}
+
 /** API passed to plugin register(api). The host implements this. */
 export interface KonstructPluginApi {
   registerTool: (name: string, fn: ToolRunner) => void;
@@ -64,6 +78,8 @@ export interface KonstructPluginApi {
   config: KonstructPluginConfig;
   pluginConfig: Record<string, unknown>;
   registerRouter: (name: string, router: unknown) => void;
+  /** tRPC helpers for creating server-side routers that integrate with the app's tRPC stack. */
+  trpc: PluginTrpc;
 }
 
 /** Props for the optional settings panel component (export default from ./settings). */

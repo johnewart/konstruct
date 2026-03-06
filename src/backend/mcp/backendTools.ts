@@ -21,6 +21,7 @@
 
 import * as sessionStore from '../../shared/sessionStore';
 import { isBackendTool } from '../../shared/toolClassification';
+import { executeTool } from '../../agent/tools/executor';
 
 /** Minimal progress store interface to avoid importing from runLoop (circular). */
 export interface BackendToolProgressStore {
@@ -50,11 +51,11 @@ function ensureSessionLoaded(sessionId: string, projectRoot: string): string | n
   return session ? projectId : null;
 }
 
-export function runBackendTool(
+export async function runBackendTool(
   name: string,
   args: Record<string, unknown>,
   ctx: BackendToolContext
-): BackendToolResult {
+): Promise<BackendToolResult> {
   if (!isBackendTool(name)) {
     return { error: `"${name}" is not a backend tool` };
   }
@@ -153,6 +154,7 @@ export function runBackendTool(
     }
 
     default:
-      return { error: `unknown backend tool: ${name}` };
+      // Plugin-registered tools are in BACKEND_TOOL_NAMES but handled via the executor.
+      return executeTool(name, args, { projectRoot: ctx.projectRoot });
   }
 }

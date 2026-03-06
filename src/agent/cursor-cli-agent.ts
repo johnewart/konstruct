@@ -16,7 +16,7 @@
 
 /**
  * Invoke the Cursor CLI agent (agent --print) for a single prompt.
- * Spawns the installed `agent` (or `cursor agent`) binary with --print --trust.
+ * Spawns the installed `agent` (or `cursor agent`) binary with --print --trust --approve-mcps.
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
@@ -52,7 +52,7 @@ export interface CursorAgentResult {
 }
 
 function buildArgs(options: CursorAgentOptions, prompt: string): string[] {
-  const args: string[] = ['--print', '--trust'];
+  const args: string[] = ['--print', '--trust', '--approve-mcps'];
   if (options.cwd?.trim()) {
     args.push('--workspace', options.cwd.trim());
   }
@@ -73,7 +73,7 @@ function buildArgs(options: CursorAgentOptions, prompt: string): string[] {
 
 /**
  * Invoke the Cursor CLI agent with the given prompt.
- * Uses --print --trust; prompt is passed as the final argument.
+ * Uses --print --trust --approve-mcps; prompt is passed as the final argument.
  */
 export function invokeCursorAgent(
   prompt: string,

@@ -1,32 +1,25 @@
 /**
- * Konstruct JIRA plugin.
+ * Konstruct JIRA Cloud plugin.
  *
- * Requires the following in ~/.config/konstruct/config.yml:
- *
+ * Add to config:
  *   plugins:
- *     enabled:
- *       - jira
- *
+ *     enabled: [jira]
  *   jira:
  *     baseUrl: https://your-org.atlassian.net
  *     email: you@example.com
- *     apiToken: YOUR_ATLASSIAN_API_TOKEN
+ *     apiToken: your-api-token
  *
- * Uses JIRA REST API v3. Authentication is Basic: base64(email:apiToken).
+ * Registered tools (for AI agent):
+ *   jira_get_issue, jira_search_issues, jira_create_issue,
+ *   jira_update_issue, jira_add_comment, jira_transition_issue,
+ *   jira_get_projects
+ *
+ * Registered tRPC router (for frontend search/detail view):
+ *   jira.isConfigured, jira.searchIssues, jira.getIssue, jira.getProjects
  */
 
-'use strict';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Wrap plain text in Atlassian Document Format (ADF).
- * @param {string} text
- * @returns {object}
- */
-function toAdf(text) {
+/** Convert plain text to the minimal Atlassian Document Format (ADF) required by v3 endpoints. */
+function textToAdf(text) {
   return {
     version: 1,
     type: 'doc',
@@ -39,123 +32,224 @@ function toAdf(text) {
   };
 }
 
-/**
- * Make an authenticated request to the JIRA REST API v3.
- *
- * @param {{ baseUrl: string, email: string, apiToken: string }} cfg
- * @param {string} path  Path relative to /rest/api/3/ (e.g. "issue/PROJ-1")
- * @param {RequestInit} [options]
- * @returns {Promise<any>}
- */
-async function jiraFetch(cfg, path, options = {}) {
-  const { baseUrl, email, apiToken } = cfg;
-
-  if (!baseUrl || !email || !apiToken) {
-    throw new Error(
-      'JIRA plugin is not configured. Set jira.baseUrl, jira.email, and jira.apiToken in config.',
-    );
-  }
-
-  const url = `${baseUrl.replace(/\/$/, '')}/rest/api/3/${path}`;
-  const credentials = Buffer.from(`${email}:${apiToken}`).toString('base64');
-
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`JIRA API error ${response.status}: ${text}`);
-  }
-
-  // 204 No Content — return empty object
-  if (response.status === 204) return {};
-
-  return response.json();
+/** Extract plain text from an Atlassian Document Format (ADF) node. */
+function adfToText(node) {
+  if (!node || typeof node !== 'object') return '';
+  if (node.type === 'text' && typeof node.text === 'string') return node.text;
+  if (Array.isArray(node.content)) return node.content.map(adfToText).join('');
+  return '';
 }
-
-/**
- * Validate that plugin config contains the required credentials and return an
- * error object if not (so tools can return early).
- *
- * @param {object} cfg
- * @returns {{ error: string } | null}
- */
-function configError(cfg) {
-  if (!cfg || !cfg.baseUrl || !cfg.email || !cfg.apiToken) {
-    return {
-      error:
-        'JIRA plugin is not configured. Set jira.baseUrl, jira.email, and jira.apiToken in config.',
-    };
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Plugin registration
-// ---------------------------------------------------------------------------
 
 function register(api) {
-  const { registerTool, addToolDefinitions, pluginConfig } = api;
+  const { registerTool, addToolDefinitions, pluginConfig, trpc } = api;
 
-  // pluginConfig is the object at the "jira:" key in config.yml
-  const cfg = pluginConfig ?? {};
+  // ─── JIRA HTTP client ──────────────────────────────────────────────────────
 
-  // ------------------------------------------------------------------
-  // Tool definitions (schema)
-  // ------------------------------------------------------------------
+  function authHeader() {
+    const { email, apiToken } = pluginConfig ?? {};
+    if (!email || !apiToken) throw new Error('JIRA plugin: missing email or apiToken in config');
+    return 'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
+  }
+
+  /** Make an authenticated request to the JIRA REST API v3 — shared by tools AND the tRPC router. */
+  async function jiraFetch(path, options = {}) {
+    const { baseUrl } = pluginConfig ?? {};
+    if (!baseUrl) throw new Error('JIRA plugin: missing baseUrl in config');
+
+    const url = `${baseUrl.replace(/\/$/, '')}/rest/api/3${path}`;
+    const method = options.method ?? 'GET';
+
+    if (options.body) {
+      console.log(`[jira-plugin] → ${method} ${url}\n[jira-plugin] Request body:`, options.body);
+    } else {
+      console.log(`[jira-plugin] → ${method} ${url}`);
+    }
+
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: authHeader(),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers ?? {}),
+      },
+    });
+
+    const text = await res.text();
+    console.log(`[jira-plugin] ← ${res.status} ${res.statusText}`);
+    console.log(`[jira-plugin] Raw response:`, text);
+
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { raw: text };
+    }
+
+    if (!res.ok) {
+      const msg = body?.errorMessages?.join(', ') || body?.message || `HTTP ${res.status}`;
+      throw new Error(`JIRA API error: ${msg}`);
+    }
+
+    return body;
+  }
+
+  // ─── tRPC router (used by the frontend search/detail view) ────────────────
+
+  if (trpc) {
+    const { router, procedure, z } = trpc;
+
+    const jiraRouter = router({
+      /** Whether JIRA credentials are present and valid. */
+      isConfigured: procedure.query(async () => {
+        const { baseUrl, email, apiToken } = pluginConfig ?? {};
+        return { configured: !!(baseUrl && email && apiToken) };
+      }),
+
+      /** List accessible JIRA projects. */
+      getProjects: procedure.query(async () => {
+        try {
+          const data = await jiraFetch('/project');
+          return {
+            error: null,
+            projects: (Array.isArray(data) ? data : []).map((p) => ({
+              id: p.id,
+              key: p.key,
+              name: p.name,
+              type: p.projectTypeKey ?? '',
+              avatarUrl: p.avatarUrls?.['48x48'] ?? '',
+            })),
+          };
+        } catch (e) {
+          return { error: String(e instanceof Error ? e.message : e), projects: [] };
+        }
+      }),
+
+      /** Search issues with JQL — uses the new /search/jql endpoint. */
+      searchIssues: procedure
+        .input(
+          z.object({
+            jql: z.string(),
+            maxResults: z.number().int().min(1).max(100).optional().default(50),
+            nextPageToken: z.string().optional(),
+          })
+        )
+        .query(async ({ input }) => {
+          try {
+            // Use POST with a JSON body — the GET variant with query params silently
+            // returns empty results for many orgs even with a valid 200 response.
+            const body = {
+              jql: input.jql,
+              maxResults: input.maxResults,
+              fields: ['summary', 'status', 'assignee', 'priority', 'issuetype', 'created', 'updated', 'labels'],
+            };
+            if (input.nextPageToken) body.nextPageToken = input.nextPageToken;
+
+            const data = await jiraFetch('/search/jql', {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            return {
+              error: null,
+              total: data.total ?? 0,
+              nextPageToken: data.nextPageToken ?? null,
+              issues: (data.issues ?? []).map((i) => ({
+                id: i.id,
+                key: i.key,
+                summary: i.fields.summary,
+                status: i.fields.status?.name ?? '',
+                statusColor: i.fields.status?.statusCategory?.colorName ?? '',
+                assignee: i.fields.assignee?.displayName ?? null,
+                assigneeAvatar: i.fields.assignee?.avatarUrls?.['24x24'] ?? null,
+                priority: i.fields.priority?.name ?? null,
+                priorityIconUrl: i.fields.priority?.iconUrl ?? null,
+                issueType: i.fields.issuetype?.name ?? i.fields.type?.name ?? '',
+                issueTypeIconUrl: i.fields.issuetype?.iconUrl ?? i.fields.type?.iconUrl ?? null,
+                created: i.fields.created,
+                updated: i.fields.updated,
+                labels: i.fields.labels ?? [],
+              })),
+            };
+          } catch (e) {
+            return { error: String(e instanceof Error ? e.message : e), issues: [], total: 0, nextPageToken: null };
+          }
+        }),
+
+      /** Get a single issue by key with full details and comments. */
+      getIssue: procedure
+        .input(z.object({ issueKey: z.string() }))
+        .query(async ({ input }) => {
+          try {
+            const data = await jiraFetch(
+              `/issue/${input.issueKey}?fields=summary,description,status,assignee,priority,labels,comment,created,updated`
+            );
+            return {
+              error: null,
+              issue: {
+                id: data.id,
+                key: data.key,
+                summary: data.fields.summary,
+                description: adfToText(data.fields.description),
+                status: data.fields.status?.name ?? '',
+                statusColor: data.fields.status?.statusCategory?.colorName ?? '',
+                assignee: data.fields.assignee?.displayName ?? null,
+                assigneeAvatar: data.fields.assignee?.avatarUrls?.['48x48'] ?? null,
+                priority: data.fields.priority?.name ?? null,
+                issueType: data.fields.issuetype?.name ?? data.fields.type?.name ?? '',
+                issueTypeIconUrl: data.fields.issuetype?.iconUrl ?? data.fields.type?.iconUrl ?? null,
+                labels: data.fields.labels ?? [],
+                created: data.fields.created,
+                updated: data.fields.updated,
+                comments: (data.fields.comment?.comments ?? []).map((c) => ({
+                  id: c.id,
+                  author: c.author.displayName,
+                  authorAvatar: c.author.avatarUrls?.['24x24'] ?? null,
+                  body: adfToText(c.body),
+                  created: c.created,
+                })),
+              },
+            };
+          } catch (e) {
+            return { error: String(e instanceof Error ? e.message : e), issue: null };
+          }
+        }),
+    });
+
+    api.registerRouter('jira', jiraRouter);
+  }
+
+  // ─── Tool definitions (for the AI agent) ──────────────────────────────────
+
   addToolDefinitions([
-    // jira_get_issue
     {
       type: 'function',
       function: {
         name: 'jira_get_issue',
-        description:
-          'Get a JIRA issue by its key (e.g. PROJ-123). Returns summary, description, status, assignee, priority, labels, and comments.',
+        description: 'Get a JIRA issue by its key (e.g. PROJ-123). Returns summary, description, status, assignee, priority, labels, and comments.',
         parameters: {
           type: 'object',
           properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The JIRA issue key, e.g. PROJ-123.',
-            },
+            issueKey: { type: 'string', description: 'The JIRA issue key, e.g. PROJ-123.' },
           },
           required: ['issueKey'],
         },
       },
     },
-
-    // jira_search_issues
     {
       type: 'function',
       function: {
         name: 'jira_search_issues',
-        description:
-          'Search JIRA issues using JQL (JIRA Query Language). Returns a list of matching issues with key, summary, status, assignee, and priority.',
+        description: 'Search JIRA issues using JQL (JIRA Query Language). Returns a list of matching issues with key, summary, status, assignee, and priority.',
         parameters: {
           type: 'object',
           properties: {
-            jql: {
-              type: 'string',
-              description: 'JQL query string, e.g. "project = PROJ AND status = Open".',
-            },
-            maxResults: {
-              type: 'number',
-              description: 'Maximum number of results to return (default: 20).',
-            },
+            jql: { type: 'string', description: 'JQL query string, e.g. "project = PROJ AND status = Open".' },
+            maxResults: { type: 'number', description: 'Maximum number of results to return (default: 20).' },
           },
           required: ['jql'],
         },
       },
     },
-
-    // jira_create_issue
     {
       type: 'function',
       function: {
@@ -164,37 +258,17 @@ function register(api) {
         parameters: {
           type: 'object',
           properties: {
-            projectKey: {
-              type: 'string',
-              description: 'The project key, e.g. PROJ.',
-            },
-            summary: {
-              type: 'string',
-              description: 'Issue summary / title.',
-            },
-            issueType: {
-              type: 'string',
-              description: 'Issue type name (default: "Task").',
-            },
-            description: {
-              type: 'string',
-              description: 'Issue description (plain text).',
-            },
-            priority: {
-              type: 'string',
-              description: 'Priority name, e.g. "High", "Medium", "Low".',
-            },
-            assigneeEmail: {
-              type: 'string',
-              description: 'Email address of the user to assign the issue to.',
-            },
+            projectKey: { type: 'string', description: 'The project key, e.g. PROJ.' },
+            summary: { type: 'string', description: 'Issue summary / title.' },
+            description: { type: 'string', description: 'Issue description (plain text).' },
+            issueType: { type: 'string', description: 'Issue type name (default: "Task").' },
+            priority: { type: 'string', description: 'Priority name, e.g. "High", "Medium", "Low".' },
+            assigneeEmail: { type: 'string', description: 'Email address of the user to assign the issue to.' },
           },
           required: ['projectKey', 'summary'],
         },
       },
     },
-
-    // jira_update_issue
     {
       type: 'function',
       function: {
@@ -203,29 +277,15 @@ function register(api) {
         parameters: {
           type: 'object',
           properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The JIRA issue key, e.g. PROJ-123.',
-            },
-            summary: {
-              type: 'string',
-              description: 'New summary / title.',
-            },
-            description: {
-              type: 'string',
-              description: 'New description (plain text).',
-            },
-            priority: {
-              type: 'string',
-              description: 'New priority name, e.g. "High".',
-            },
+            issueKey: { type: 'string', description: 'The JIRA issue key, e.g. PROJ-123.' },
+            summary: { type: 'string', description: 'New summary / title.' },
+            description: { type: 'string', description: 'New description (plain text).' },
+            priority: { type: 'string', description: 'New priority name, e.g. "High".' },
           },
           required: ['issueKey'],
         },
       },
     },
-
-    // jira_add_comment
     {
       type: 'function',
       function: {
@@ -234,45 +294,28 @@ function register(api) {
         parameters: {
           type: 'object',
           properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The JIRA issue key, e.g. PROJ-123.',
-            },
-            comment: {
-              type: 'string',
-              description: 'Comment text (plain text).',
-            },
+            issueKey: { type: 'string', description: 'The JIRA issue key, e.g. PROJ-123.' },
+            comment: { type: 'string', description: 'Comment text (plain text).' },
           },
           required: ['issueKey', 'comment'],
         },
       },
     },
-
-    // jira_transition_issue
     {
       type: 'function',
       function: {
         name: 'jira_transition_issue',
-        description:
-          'Transition a JIRA issue to a different status (e.g. "In Progress", "Done"). Fetches available transitions and matches the name case-insensitively.',
+        description: 'Transition a JIRA issue to a different status (e.g. "In Progress", "Done"). Fetches available transitions and matches the name case-insensitively.',
         parameters: {
           type: 'object',
           properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The JIRA issue key, e.g. PROJ-123.',
-            },
-            transitionName: {
-              type: 'string',
-              description: 'Name of the transition to apply, e.g. "In Progress" or "Done".',
-            },
+            issueKey: { type: 'string', description: 'The JIRA issue key, e.g. PROJ-123.' },
+            transitionName: { type: 'string', description: 'Name of the transition to apply, e.g. "In Progress" or "Done".' },
           },
           required: ['issueKey', 'transitionName'],
         },
       },
     },
-
-    // jira_get_projects
     {
       type: 'function',
       function: {
@@ -287,247 +330,158 @@ function register(api) {
     },
   ]);
 
-  // ------------------------------------------------------------------
-  // Tool handlers
-  // ------------------------------------------------------------------
+  // ─── Tool implementations (for the AI agent) ──────────────────────────────
 
-  // jira_get_issue
-  registerTool('jira_get_issue', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_get_issue', async ({ issueKey }) => {
     try {
-      const { issueKey } = args;
-      const data = await jiraFetch(
-        cfg,
-        `issue/${encodeURIComponent(issueKey)}?fields=summary,description,status,assignee,priority,labels,comment`,
-      );
-
-      const fields = data.fields ?? {};
+      const issue = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}?expand=renderedFields,names`);
+      const f = issue.fields ?? {};
       return {
-        key: data.key,
-        summary: fields.summary,
-        status: fields.status?.name,
-        assignee: fields.assignee?.displayName ?? fields.assignee?.emailAddress ?? null,
-        priority: fields.priority?.name,
-        labels: fields.labels ?? [],
-        description: extractText(fields.description),
-        comments: (fields.comment?.comments ?? []).map((c) => ({
-          author: c.author?.displayName ?? c.author?.emailAddress,
+        key: issue.key,
+        summary: f.summary,
+        status: f.status?.name,
+        assignee: f.assignee?.emailAddress ?? f.assignee?.displayName ?? null,
+        priority: f.priority?.name,
+        labels: f.labels ?? [],
+        description: adfToText(f.description),
+        comments: (f.comment?.comments ?? []).map((c) => ({
+          author: c.author?.displayName,
+          body: adfToText(c.body),
           created: c.created,
-          body: extractText(c.body),
         })),
       };
-    } catch (e) {
-      return { error: e.message };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_search_issues
-  registerTool('jira_search_issues', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_search_issues', async ({ jql, maxResults = 20 }) => {
     try {
-      const { jql, maxResults = 20 } = args;
-      const params = new URLSearchParams({
-        jql,
-        maxResults: String(maxResults),
-        fields: 'summary,status,assignee,priority',
+      // Use POST with a JSON body — the GET variant silently returns empty results for many orgs.
+      const data = await jiraFetch('/search/jql', {
+        method: 'POST',
+        body: JSON.stringify({
+          jql: String(jql),
+          maxResults,
+          fields: ['summary', 'status', 'assignee', 'priority', 'issuetype', 'created', 'updated', 'labels'],
+        }),
       });
-      const data = await jiraFetch(cfg, `search?${params.toString()}`);
-
       return {
         total: data.total,
-        issues: (data.issues ?? []).map((issue) => ({
-          key: issue.key,
-          summary: issue.fields?.summary,
-          status: issue.fields?.status?.name,
-          assignee:
-            issue.fields?.assignee?.displayName ?? issue.fields?.assignee?.emailAddress ?? null,
-          priority: issue.fields?.priority?.name,
+        issues: (data.issues ?? []).map((i) => ({
+          key: i.key,
+          summary: i.fields?.summary,
+          status: i.fields?.status?.name,
+          assignee: i.fields?.assignee?.emailAddress ?? i.fields?.assignee?.displayName ?? null,
+          priority: i.fields?.priority?.name,
         })),
       };
-    } catch (e) {
-      return { error: e.message };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_create_issue
-  registerTool('jira_create_issue', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_create_issue', async ({ projectKey, summary, description, issueType = 'Task', priority, assigneeEmail }) => {
     try {
-      const {
-        projectKey,
-        summary,
-        issueType = 'Task',
-        description,
-        priority,
-        assigneeEmail,
-      } = args;
-
       const fields = {
         project: { key: projectKey },
         summary,
         issuetype: { name: issueType },
       };
 
-      if (description) {
-        fields.description = toAdf(description);
-      }
-
-      if (priority) {
-        fields.priority = { name: priority };
-      }
+      if (description) fields.description = textToAdf(description);
+      if (priority) fields.priority = { name: priority };
 
       if (assigneeEmail) {
-        // Look up account ID by email
-        const users = await jiraFetch(
-          cfg,
-          `user/search?query=${encodeURIComponent(assigneeEmail)}`,
-        );
-        if (users && users.length > 0) {
-          fields.assignee = { accountId: users[0].accountId };
+        try {
+          const users = await jiraFetch(`/user/search?query=${encodeURIComponent(assigneeEmail)}`);
+          const match = users.find((u) => u.emailAddress === assigneeEmail) ?? users[0];
+          if (match) fields.assignee = { accountId: match.accountId };
+        } catch {
+          // Non-fatal — create issue without assignee
         }
       }
 
-      const data = await jiraFetch(cfg, 'issue', {
+      const result = await jiraFetch('/issue', {
         method: 'POST',
         body: JSON.stringify({ fields }),
       });
 
-      return { key: data.key, id: data.id, self: data.self };
-    } catch (e) {
-      return { error: e.message };
+      return { key: result.key, id: result.id, self: result.self };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_update_issue
-  registerTool('jira_update_issue', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_update_issue', async ({ issueKey, summary, description, priority }) => {
     try {
-      const { issueKey, summary, description, priority } = args;
-
       const fields = {};
-
       if (summary !== undefined) fields.summary = summary;
-      if (description !== undefined) fields.description = toAdf(description);
+      if (description !== undefined) fields.description = textToAdf(description);
       if (priority !== undefined) fields.priority = { name: priority };
 
-      if (Object.keys(fields).length === 0) {
-        return { error: 'No fields provided to update.' };
-      }
-
-      await jiraFetch(cfg, `issue/${encodeURIComponent(issueKey)}`, {
+      await jiraFetch(`/issue/${encodeURIComponent(issueKey)}`, {
         method: 'PUT',
         body: JSON.stringify({ fields }),
       });
 
-      return { success: true, issueKey };
-    } catch (e) {
-      return { error: e.message };
+      return { success: true, key: issueKey };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_add_comment
-  registerTool('jira_add_comment', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_add_comment', async ({ issueKey, comment }) => {
     try {
-      const { issueKey, comment } = args;
-
-      const data = await jiraFetch(cfg, `issue/${encodeURIComponent(issueKey)}/comment`, {
+      const result = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/comment`, {
         method: 'POST',
-        body: JSON.stringify({ body: toAdf(comment) }),
+        body: JSON.stringify({ body: textToAdf(comment) }),
       });
 
-      return { id: data.id, self: data.self };
-    } catch (e) {
-      return { error: e.message };
+      return { id: result.id, created: result.created };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_transition_issue
-  registerTool('jira_transition_issue', async (args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_transition_issue', async ({ issueKey, transitionName }) => {
     try {
-      const { issueKey, transitionName } = args;
-
-      // Fetch available transitions
-      const data = await jiraFetch(
-        cfg,
-        `issue/${encodeURIComponent(issueKey)}/transitions`,
+      const { transitions } = await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/transitions`);
+      const target = (transitions ?? []).find(
+        (t) => t.name.toLowerCase() === transitionName.toLowerCase()
       );
 
-      const transitions = data.transitions ?? [];
-      const match = transitions.find(
-        (t) => t.name.toLowerCase() === transitionName.toLowerCase(),
-      );
-
-      if (!match) {
-        const available = transitions.map((t) => t.name).join(', ');
-        return {
-          error: `Transition "${transitionName}" not found. Available transitions: ${available}`,
-        };
+      if (!target) {
+        const available = (transitions ?? []).map((t) => t.name).join(', ');
+        return { error: `Transition "${transitionName}" not found. Available: ${available}` };
       }
 
-      await jiraFetch(cfg, `issue/${encodeURIComponent(issueKey)}/transitions`, {
+      await jiraFetch(`/issue/${encodeURIComponent(issueKey)}/transitions`, {
         method: 'POST',
-        body: JSON.stringify({ transition: { id: match.id } }),
+        body: JSON.stringify({ transition: { id: target.id } }),
       });
 
-      return { success: true, issueKey, transition: match.name };
-    } catch (e) {
-      return { error: e.message };
+      return { success: true, key: issueKey, transitionedTo: target.name };
+    } catch (err) {
+      return { error: err.message };
     }
   });
 
-  // jira_get_projects
-  registerTool('jira_get_projects', async (_args) => {
-    const err = configError(cfg);
-    if (err) return err;
-
+  registerTool('jira_get_projects', async () => {
     try {
-      const projects = await jiraFetch(cfg, 'project');
-
+      const projects = await jiraFetch('/project/search?orderBy=name');
       return {
-        projects: (Array.isArray(projects) ? projects : []).map((p) => ({
-          id: p.id,
+        projects: (projects.values ?? []).map((p) => ({
           key: p.key,
           name: p.name,
-          projectTypeKey: p.projectTypeKey,
+          type: p.projectTypeKey,
+          lead: p.lead?.displayName ?? null,
         })),
       };
-    } catch (e) {
-      return { error: e.message };
+    } catch (err) {
+      return { error: err.message };
     }
   });
-}
-
-// ---------------------------------------------------------------------------
-// Utility: extract plain text from ADF or string descriptions
-// ---------------------------------------------------------------------------
-
-/**
- * Recursively extract text from an Atlassian Document Format node (or plain string).
- * @param {any} node
- * @returns {string}
- */
-function extractText(node) {
-  if (!node) return '';
-  if (typeof node === 'string') return node;
-  if (node.type === 'text') return node.text ?? '';
-  if (Array.isArray(node.content)) {
-    return node.content.map(extractText).join('');
-  }
-  return '';
 }
 
 module.exports = { register };

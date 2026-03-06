@@ -96,9 +96,22 @@ async function handleRequest(
     return;
   }
 
-  // GET /mcp — MCP SSE session
-  if (pathname === '/mcp' && req.method === 'GET') {
+  // MCP routes — log method/path for debugging connection issues
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+    log.info('mcp request', req.method, pathname, url.search || '(no query)');
+  }
+  // GET or POST /mcp — MCP SSE session (spec is GET; we accept POST for Cursor compatibility)
+  if (pathname === '/mcp' && (req.method === 'GET' || req.method === 'POST')) {
+    if (req.method === 'POST') {
+      req.resume(); // drain body so the request stream is clean
+    }
     handleMcpSse(req, res, url);
+    return;
+  }
+  if (pathname === '/mcp') {
+    log.warn('mcp GET or POST required for SSE session, got', req.method);
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Method Not Allowed', detail: 'Use GET or POST /mcp to open the MCP SSE session' }));
     return;
   }
 

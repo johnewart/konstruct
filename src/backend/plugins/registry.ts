@@ -21,8 +21,11 @@ import type { KonstructPluginApi } from 'konstruct-sdk';
 import type { KonstructConfig } from '../../shared/config';
 import type { ToolDefinition } from '../../shared/llm';
 import { registerTool, unregisterTools } from '../../agent/tools/executor';
+import { addBackendToolName } from '../../shared/toolClassification';
 import { loadGlobalConfig } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
+import { router as trpcRouter, publicProcedure } from '../trpc/trpc';
+import { z } from 'zod';
 
 // Ensure core tools are registered before plugins load
 import '../../agent/tools/runners';
@@ -60,10 +63,15 @@ export function loadPlugins(config: KonstructConfig): void {
         continue;
       }
       pluginIdToToolNames[id] = [];
-      const pluginConfig = (config[id as keyof KonstructConfig] as Record<string, unknown>) ?? {};
+      // Prefer UI-saved pluginConfig blob; fall back to top-level config key (e.g. config.jira).
+      const pluginConfig =
+        (config.pluginConfig?.[id] as Record<string, unknown>) ??
+        (config[id as keyof KonstructConfig] as Record<string, unknown>) ??
+        {};
       const api: KonstructPluginApi = {
         registerTool(name: string, fn: Parameters<typeof registerTool>[1]) {
           pluginIdToToolNames[id].push(name);
+          addBackendToolName(name);
           registerTool(name, fn);
         },
         addToolDefinitions(defs: ToolDefinition[]) {
@@ -74,6 +82,11 @@ export function loadPlugins(config: KonstructConfig): void {
         pluginConfig,
         registerRouter(name: string, router: unknown) {
           pluginRouters[name] = router;
+        },
+        trpc: {
+          router: trpcRouter as KonstructPluginApi['trpc']['router'],
+          procedure: publicProcedure,
+          z,
         },
       };
       register(api);

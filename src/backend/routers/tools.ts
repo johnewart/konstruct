@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import { getToolsForMode } from '../../agent/toolDefinitions';
 import { MODE_IDS } from '../../agent/modes';
+import { getDisabledToolsForProject, setDisabledToolsForProject } from '../../shared/config';
 
 export const toolsRouter = router({
   /** List all known tools (same source as MCP: getToolsForMode per mode, merged). */
@@ -38,4 +40,25 @@ export const toolsRouter = router({
     tools.sort((a, b) => a.name.localeCompare(b.name));
     return { tools };
   }),
+
+  /** Get the list of disabled tool names for a project. */
+  getDisabledTools: publicProcedure
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(({ input }) => {
+      const disabled = getDisabledToolsForProject(input.projectId);
+      return { projectId: input.projectId, disabled };
+    }),
+
+  /** Set (replace) the disabled tool names for a project. Pass empty array to clear. */
+  setDisabledTools: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        disabled: z.array(z.string()),
+      })
+    )
+    .mutation(({ input }) => {
+      setDisabledToolsForProject(input.projectId, input.disabled);
+      return { ok: true };
+    }),
 });

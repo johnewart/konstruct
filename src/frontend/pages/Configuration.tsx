@@ -131,6 +131,12 @@ function PluginsSection() {
   );
   const setPluginSettings = trpc.plugins.setPluginSettings.useMutation();
 
+  const { data: pluginConfigData } = trpc.plugins.getPluginConfig.useQuery(
+    { pluginId: settingsPluginId! },
+    { enabled: !!settingsPluginId }
+  );
+  const setPluginConfig = trpc.plugins.setPluginConfig.useMutation();
+
   const handleToggle = (pluginId: string, enabled: boolean) => {
     setPluginEnabled.mutate(
       { pluginId, enabled },
@@ -197,12 +203,23 @@ function PluginsSection() {
           pluginId={settingsPluginId}
           projectId={effectiveProjectId}
           settings={settingsData?.settings ?? {}}
+          pluginConfig={pluginConfigData?.config ?? {}}
           onSave={(settings) => {
             setPluginSettings.mutate(
               { projectId: effectiveProjectId, pluginId: settingsPluginId, settings },
               {
                 onSuccess: () => {
                   void utils.plugins.getPluginSettings.invalidate();
+                },
+              }
+            );
+          }}
+          onSaveConfig={(config) => {
+            setPluginConfig.mutate(
+              { pluginId: settingsPluginId, config },
+              {
+                onSuccess: () => {
+                  void utils.plugins.getPluginConfig.invalidate();
                 },
               }
             );
@@ -218,7 +235,9 @@ function PluginSettingsModal({
   pluginId,
   projectId,
   settings,
+  pluginConfig,
   onSave,
+  onSaveConfig,
   onClose,
 }: PluginSettingsProps & { onClose: () => void }) {
   const [Component, setComponent] = useState<React.ComponentType<PluginSettingsProps> | null>(null);
@@ -228,14 +247,14 @@ function PluginSettingsModal({
     setErr(null);
     setComponent(null);
     const load = getPluginSettingsLoader(pluginId);
+    if (!load) {
+      setErr('No settings panel for this plugin');
+      return;
+    }
     load()
       .then((m) => (m?.default ? setComponent(() => m.default) : setErr('No settings panel for this plugin')))
       .catch((e) => setErr(e?.message?.includes('Cannot find module') ? 'No settings panel for this plugin' : (e?.message ?? 'Failed to load settings')));
   }, [pluginId]);
-
-  const handleSave = (next: Record<string, unknown>) => {
-    onSave(next);
-  };
 
   return (
     <Modal
@@ -251,7 +270,9 @@ function PluginSettingsModal({
           pluginId={pluginId}
           projectId={projectId}
           settings={settings}
-          onSave={handleSave}
+          pluginConfig={pluginConfig}
+          onSave={onSave}
+          onSaveConfig={onSaveConfig}
         />
       )}
     </Modal>
@@ -259,30 +280,81 @@ function PluginSettingsModal({
 }
 
 function ToolsSection() {
+  const { projectId } = useProjectModel();
+  const effectiveProjectId = projectId ?? '_default';
+
   const { data, isLoading } = trpc.tools.listAll.useQuery();
+  const { data: disabledData, isLoading: disabledLoading } = trpc.tools.getDisabledTools.useQuery(
+    { projectId: effectiveProjectId },
+  );
+  const setDisabledTools = trpc.tools.setDisabledTools.useMutation();
+  const utils = trpc.useUtils();
+
   const tools = data?.tools ?? [];
+  const disabledSet = new Set(disabledData?.disabled ?? []);
+
+  const handleToggle = (toolName: string, enabled: boolean) => {
+    const nextDisabled = enabled
+      ? [...disabledSet].filter((n) => n !== toolName)
+      : [...disabledSet, toolName];
+    setDisabledTools.mutate(
+      { projectId: effectiveProjectId, disabled: nextDisabled },
+      { onSuccess: () => void utils.tools.getDisabledTools.invalidate() }
+    );
+  };
+
+  const isReady = !isLoading && !disabledLoading;
+  const disabledCount = disabledSet.size;
+
   return (
     <Stack gap="md">
       <Text fw={600} size="sm">
         Tools
       </Text>
       <Text size="sm" c="dimmed">
-        All tools available to the agent (core and from plugins). Modes expose a subset of these.
+        Enable or disable individual tools for the current project. Disabled tools are hidden from the agent and cannot be called.
+        {projectId ? (
+          <> Settings apply to project <strong>{projectId}</strong>.</>
+        ) : (
+          <> No project selected — settings apply globally (project id: <code>_default</code>).</>
+        )}
       </Text>
-      {isLoading ? (
+      {disabledCount > 0 && (
+        <Text size="xs" c="orange" fw={500}>
+          {disabledCount} tool{disabledCount !== 1 ? 's' : ''} currently disabled for this project.
+        </Text>
+      )}
+      {!isReady ? (
         <Text size="sm" c="dimmed">Loading…</Text>
       ) : tools.length === 0 ? (
         <Text size="sm" c="dimmed">No tools.</Text>
       ) : (
         <Stack gap="xs">
-          {tools.map((t) => (
-            <Card key={t.name} withBorder padding="sm" radius="md">
-              <Text fw={500} size="sm">{t.name}</Text>
-              {t.description && (
-                <Text size="xs" c="dimmed" mt={4}>{t.description}</Text>
-              )}
-            </Card>
-          ))}
+          {tools.map((t) => {
+            const isEnabled = !disabledSet.has(t.name);
+            return (
+              <Card key={t.name} withBorder padding="sm" radius="md">
+                <Group justify="space-between" wrap="nowrap">
+                  <Box style={{ flex: 1, minWidth: 0 }}>
+                    <Text fw={500} size="sm" c={isEnabled ? undefined : 'dimmed'}>
+                      {t.name}
+                    </Text>
+                    {t.description && (
+                      <Text size="xs" c="dimmed" mt={4} lineClamp={2}>
+                        {t.description}
+                      </Text>
+                    )}
+                  </Box>
+                  <Switch
+                    size="md"
+                    checked={isEnabled}
+                    onChange={(e) => handleToggle(t.name, e.currentTarget.checked)}
+                    aria-label={`${isEnabled ? 'Disable' : 'Enable'} ${t.name}`}
+                  />
+                </Group>
+              </Card>
+            );
+          })}
         </Stack>
       )}
     </Stack>

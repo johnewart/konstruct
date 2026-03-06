@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import type { ComponentType } from 'react';
 import { trpc } from '../../client/trpc';
 import type { PluginViewMeta } from './registry';
 
@@ -22,9 +23,25 @@ export interface PluginViewEntry extends PluginViewMeta {
   id: string;
 }
 
-/** Load view by convention: konstruct-plugin-<id>/view (path, label, default component). */
+/**
+ * Auto-discovered view modules for all plugins.
+ * Vite evaluates this glob at build time — any new `packages/konstruct-plugin-X/view.*`
+ * is picked up automatically without any manual registry entry.
+ */
+const viewModules = import.meta.glob<{
+  default: ComponentType;
+  path: string;
+  label: string;
+}>('../../../packages/konstruct-plugin-*/view.*');
+
+/** Load view by convention: packages/konstruct-plugin-<id>/view.* */
 function loadPluginView(id: string): Promise<PluginViewEntry | null> {
-  return import(/* @vite-ignore */ `konstruct-plugin-${id}/view`)
+  // Find the glob key for this plugin id (any extension)
+  const key = Object.keys(viewModules).find((k) =>
+    k.includes(`/konstruct-plugin-${id}/view.`)
+  );
+  if (!key) return Promise.resolve(null);
+  return viewModules[key]()
     .then((mod) => {
       if (!mod?.default || typeof mod.path !== 'string' || typeof mod.label !== 'string')
         return null;

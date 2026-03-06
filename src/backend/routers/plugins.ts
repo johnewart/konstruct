@@ -91,7 +91,7 @@ export const pluginsRouter = router({
       z.object({
         projectId: z.string().min(1),
         pluginId: z.string().min(1),
-        settings: z.record(z.unknown()),
+        settings: z.record(z.string(), z.unknown()),
       })
     )
     .mutation(({ input }) => {
@@ -100,6 +100,31 @@ export const pluginsRouter = router({
       if (!config.pluginSettings[input.projectId]) config.pluginSettings[input.projectId] = {};
       config.pluginSettings[input.projectId][input.pluginId] = input.settings;
       saveGlobalConfig(config);
+      return { ok: true };
+    }),
+
+  /** Get global config blob for a plugin (credentials, endpoints — not per-workspace). */
+  getPluginConfig: publicProcedure
+    .input(z.object({ pluginId: z.string().min(1) }))
+    .query(({ input }) => {
+      const config = loadGlobalConfig();
+      const blob = config.pluginConfig?.[input.pluginId];
+      return { config: blob ?? {} };
+    }),
+
+  /** Save global config blob for a plugin (credentials, endpoints — not per-workspace). */
+  setPluginConfig: publicProcedure
+    .input(
+      z.object({
+        pluginId: z.string().min(1),
+        config: z.record(z.string(), z.unknown()),
+      })
+    )
+    .mutation(({ input }) => {
+      const cfg = loadGlobalConfig();
+      cfg.pluginConfig = cfg.pluginConfig ?? {};
+      cfg.pluginConfig[input.pluginId] = input.config;
+      saveGlobalConfig(cfg);
       return { ok: true };
     }),
 });

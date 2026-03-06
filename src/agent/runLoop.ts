@@ -26,7 +26,7 @@ import { isBackendTool } from '../shared/toolClassification';
 import { runBackendTool } from '../backend/mcp/backendTools';
 import type { Workspace } from '../shared/workspace';
 import { getMode } from './modes';
-import { loadConfig, getProviderById, getModeInstructions } from '../shared/config';
+import { loadConfig, getProviderById, getModeInstructions, getDisabledToolsForProject } from '../shared/config';
 import { getProviderAdapter } from '../shared/providers';
 import { createLogger } from '../shared/logger';
 import { analyzeConversationPattern } from './supervisor';
@@ -185,14 +185,19 @@ export async function runAgentLoop(
         : (providerId ?? '').toLowerCase();
     const additionalPrompt = providerType ? getProviderAdapter(providerType).additionalSystemPrompt?.() ?? '' : '';
     if (additionalPrompt) systemPrompt = systemPrompt + '\n\n' + additionalPrompt;
-    const tools = getToolsForMode(modeId);
+    const allTools = getToolsForMode(modeId);
+    const disabledToolNames = new Set(getDisabledToolsForProject(projectId));
+    const tools = disabledToolNames.size
+      ? allTools.filter((t) => !disabledToolNames.has(t.function.name))
+      : allTools;
     log.debug(
       'runLoop',
       sessionId,
       'mode:',
       modeId,
       'tools:',
-      tools.map((t) => t.function.name).join(', ')
+      tools.map((t) => t.function.name).join(', '),
+      disabledToolNames.size ? `(${disabledToolNames.size} disabled)` : ''
     );
 
     const messages: llm.ChatMessage[] = [
@@ -363,7 +368,7 @@ export async function runAgentLoop(
           }
           let result;
           if (isBackendTool(toolName)) {
-            result = runBackendTool(toolName, args, {
+            result = await runBackendTool(toolName, args, {
               projectRoot,
               sessionId,
               progressStore,

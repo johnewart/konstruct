@@ -1,7 +1,7 @@
 {
   "name": "konstruct-plugin-jira",
-  "version": "0.1.0",
-  "description": "Konstruct plugin for JIRA integration",
+  "version": "0.0.1",
+  "description": "JIRA Cloud plugin for Konstruct",
   "main": "index.js",
   "exports": {
     ".": "./index.js",

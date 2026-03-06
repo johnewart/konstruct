@@ -34,6 +34,11 @@ export const BACKEND_TOOL_NAMES = new Set<string>([
   'suggest_improvement',
 ]);
 
+/** Dynamically register a tool name as a backend tool (e.g. from a plugin). */
+export function addBackendToolName(name: string): void {
+  BACKEND_TOOL_NAMES.add(name);
+}
+
 export function isBackendTool(name: string): boolean {
   return BACKEND_TOOL_NAMES.has(name);
 }
