@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import { loadGlobalConfig, saveGlobalConfig } from '../../shared/config';
+import { getCanonicalProviderId } from '../../shared/providers';
 import type { ConfigProvider, ProviderModel } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
 import * as listProviderModels from '../services/listProviderModels';
@@ -106,62 +107,11 @@ export const providerConfigRouter = router({
     .mutation(({ input }) => {
       const config = loadGlobalConfig();
       const existing = config.providers ?? [];
-      const isClaudeSdk = input.provider.type.trim().toLowerCase() === 'claude_sdk';
-      const isCursor = input.provider.type.trim().toLowerCase() === 'cursor';
-      const existingClaudeSdkIdx = isClaudeSdk ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === 'claude_sdk') : -1;
-      const existingCursorIdx = isCursor ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === 'cursor') : -1;
-      if (isClaudeSdk && existingClaudeSdkIdx >= 0) {
-        const id = 'claude_sdk';
-        const updated: ConfigProvider = {
-          ...existing[existingClaudeSdkIdx],
-          id,
-          name: input.provider.name.trim(),
-          type: input.provider.type.trim(),
-          secret_ref: input.provider.secret_ref?.trim(),
-          base_url: input.provider.base_url?.trim(),
-          default_model: input.provider.default_model?.trim(),
-          endpoint: input.provider.endpoint?.trim(),
-          aws_profile: input.provider.aws_profile?.trim(),
-          runpod_pod_id: input.provider.runpod_pod_id?.trim(),
-          claude_sdk_path: input.provider.claude_sdk_path?.trim(),
-          cursor_agent_path: input.provider.cursor_agent_path?.trim(),
-          models: input.provider.models,
-          max_tokens: input.provider.max_tokens,
-          temperature: input.provider.temperature,
-        };
-        existing[existingClaudeSdkIdx] = updated;
-        config.providers = existing;
-        saveGlobalConfig(config);
-        log.debug('add provider (upsert claude_sdk)', id, input.scope);
-        return updated;
-      }
-      if (isCursor && existingCursorIdx >= 0) {
-        const id = 'cursor';
-        const updated: ConfigProvider = {
-          ...existing[existingCursorIdx],
-          id,
-          name: input.provider.name.trim(),
-          type: input.provider.type.trim(),
-          secret_ref: input.provider.secret_ref?.trim(),
-          base_url: input.provider.base_url?.trim(),
-          default_model: input.provider.default_model?.trim(),
-          endpoint: input.provider.endpoint?.trim(),
-          aws_profile: input.provider.aws_profile?.trim(),
-          runpod_pod_id: input.provider.runpod_pod_id?.trim(),
-          claude_sdk_path: input.provider.claude_sdk_path?.trim(),
-          cursor_agent_path: input.provider.cursor_agent_path?.trim(),
-          models: input.provider.models,
-          max_tokens: input.provider.max_tokens,
-          temperature: input.provider.temperature,
-        };
-        existing[existingCursorIdx] = updated;
-        config.providers = existing;
-        saveGlobalConfig(config);
-        log.debug('add provider (upsert cursor)', id, input.scope);
-        return updated;
-      }
-      const id = isClaudeSdk ? 'claude_sdk' : isCursor ? 'cursor' : randomUUID();
-      const provider: ConfigProvider = {
+      const canonicalId = getCanonicalProviderId(input.provider.type);
+      const existingIdx = canonicalId ? existing.findIndex((p) => (p.id ?? '').toLowerCase() === canonicalId) : -1;
+      const id = canonicalId || randomUUID();
+
+      const providerFields = (overrides: Partial<ConfigProvider> = {}): ConfigProvider => ({
         id,
         name: input.provider.name.trim(),
         type: input.provider.type.trim(),
@@ -176,7 +126,18 @@ export const providerConfigRouter = router({
         models: input.provider.models,
         max_tokens: input.provider.max_tokens,
         temperature: input.provider.temperature,
-      };
+        ...overrides,
+      });
+
+      if (existingIdx >= 0) {
+        const updated: ConfigProvider = { ...existing[existingIdx], ...providerFields({}) };
+        existing[existingIdx] = updated;
+        config.providers = existing;
+        saveGlobalConfig(config);
+        log.debug('add provider (upsert)', id, input.scope);
+        return updated;
+      }
+      const provider = providerFields();
       existing.push(provider);
       config.providers = existing;
       saveGlobalConfig(config);
@@ -199,8 +160,7 @@ export const providerConfigRouter = router({
       if (index === -1) throw new Error('Provider not found');
       const existing = providers[index];
       const nextType = (input.provider.type?.trim() ?? existing.type ?? '').toLowerCase();
-      const stableId =
-        nextType === 'claude_sdk' ? 'claude_sdk' : nextType === 'cursor' ? 'cursor' : existing.id;
+      const stableId = getCanonicalProviderId(nextType, existing.id) || existing.id;
       providers[index] = {
         ...existing,
         id: stableId,

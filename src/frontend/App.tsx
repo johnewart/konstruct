@@ -149,7 +149,7 @@ function TopNavModelSelector() {
   const allModelOptions = useMemo(() => {
     const list: { providerId: string; providerName: string; modelId: string; modelName: string }[] = [];
     for (const p of configuredProviders) {
-      const prov = p as { defaultModel?: string; models?: { id: string; name: string }[] };
+      const prov = p as { defaultModel?: string; models?: { id: string; name: string }[]; useDefaultModelOnly?: boolean };
       const isRunpod = p.id === 'runpod';
       const models =
         isRunpod && runpodModels.length > 0
@@ -159,13 +159,10 @@ function TopNavModelSelector() {
             : prov.defaultModel
               ? [{ id: prov.defaultModel, name: prov.defaultModel }]
               : [];
-      const providerType = (p as { type?: string }).type ?? '';
-      const isClaudeCliOrSdk = providerType === 'claude_sdk';
-      const isCursor = providerType === 'cursor';
       const modelList =
         models.length > 0
           ? models
-          : (isClaudeCliOrSdk || isCursor)
+          : prov.useDefaultModelOnly
             ? [{ id: 'default', name: 'Default' }]
             : [{ id: p.id, name: p.name }];
       for (const m of modelList) {

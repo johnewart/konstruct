@@ -20,7 +20,7 @@
  */
 
 import { loadConfig, loadGlobalConfig, getProviderById, resolveProviderSecret, saveGlobalConfig } from './config';
-import type { ProviderModel } from './config';
+import type { ConfigProvider, ProviderModel } from './config';
 import { getDefaultPodId } from './runpodProject';
 
 export type ProviderOption = {
@@ -38,6 +38,108 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'claude_sdk', name: 'Claude Code (SDK)' },
   { id: 'cursor', name: 'Cursor Agent (CLI)' },
 ];
+
+/** Result of listing models from a provider API. */
+export type ListModelsResult = { models: ProviderModel[]; error?: string };
+
+/** Per-type behavior: configured check, display URL, default model list, and optional model listing. */
+export type ProviderAdapter = {
+  /** Whether this provider is configured and usable. */
+  isConfigured: (projectRoot: string, provider: ConfigProvider) => boolean;
+  /** Optional display URL for the providers table (e.g. base URL or pod id). */
+  getDisplayUrl?: (projectRoot: string, provider: ConfigProvider) => string | undefined;
+  /** When non-empty, UI uses this list instead of fetching models (e.g. [{ id: 'default', name: 'Default' }]). */
+  getDefaultModels?: (provider: ConfigProvider) => { id: string; name: string }[];
+  /** Optional: fetch available models from the provider API. Registered by backend listProviderModels. */
+  listModels?: (
+    projectRoot: string,
+    providerId: string,
+    provider: ConfigProvider
+  ) => Promise<ListModelsResult>;
+};
+
+const listModelsRegistry: Record<string, NonNullable<ProviderAdapter['listModels']>> = {};
+
+/** Register a listModels implementation for a provider type (called from backend listProviderModels). */
+export function registerListModels(
+  type: string,
+  fn: NonNullable<ProviderAdapter['listModels']>
+): void {
+  listModelsRegistry[(type ?? '').toLowerCase()] = fn;
+}
+
+const RUNPOD_PROXY_PORT_DISPLAY = 8000;
+
+const providerAdapters: Record<string, ProviderAdapter> = {
+  openai: {
+    isConfigured: (_projectRoot, p) => !!p.secret_ref?.trim() || !!p.base_url?.trim(),
+    getDisplayUrl: (_projectRoot, p) => p.base_url ?? undefined,
+    getDefaultModels: () => [],
+  },
+  anthropic: {
+    isConfigured: (_projectRoot, p) => !!p.secret_ref?.trim(),
+    getDefaultModels: () => [],
+  },
+  bedrock: {
+    isConfigured: (projectRoot, p) => !!p.aws_profile?.trim() || isBedrockConfigured(projectRoot, p.id),
+    getDisplayUrl: (_projectRoot, p) => (p as { aws_profile?: string }).aws_profile ?? undefined,
+    getDefaultModels: () => [],
+  },
+  runpod: {
+    isConfigured: (_projectRoot, p) => {
+      const podId = (p as { runpod_pod_id?: string }).runpod_pod_id?.trim();
+      return !!podId || !!p.secret_ref?.trim();
+    },
+    getDisplayUrl: (projectRoot, p) => {
+      const podId = (p as { runpod_pod_id?: string }).runpod_pod_id?.trim();
+      if (podId) return `https://${podId}-${RUNPOD_PROXY_PORT_DISPLAY}.proxy.runpod.net/v1`;
+      return getRunpodEnv(projectRoot).baseUrl || undefined;
+    },
+    getDefaultModels: () => [],
+  },
+  ollama: {
+    isConfigured: (_projectRoot, p) => !!(p.base_url?.trim()),
+    getDisplayUrl: (_projectRoot, p) => p.base_url ?? undefined,
+    getDefaultModels: () => [],
+  },
+  claude_sdk: {
+    isConfigured: () => true,
+    getDisplayUrl: (_projectRoot, p) => (p as { claude_sdk_path?: string }).claude_sdk_path ?? undefined,
+    getDefaultModels: () => [{ id: 'default', name: 'Default' }],
+  },
+  cursor: {
+    isConfigured: () => true,
+    getDisplayUrl: (_projectRoot, p) => (p as { cursor_agent_path?: string }).cursor_agent_path ?? undefined,
+    getDefaultModels: () => [{ id: 'default', name: 'Default' }],
+  },
+};
+
+export function getProviderAdapter(type: string): ProviderAdapter {
+  const t = (type ?? '').toLowerCase();
+  const base =
+    providerAdapters[t] ?? {
+      isConfigured: (_projectRoot: string, p: ConfigProvider) => !!p.secret_ref?.trim(),
+      getDisplayUrl: (_projectRoot: string, p: ConfigProvider) => p.base_url ?? undefined,
+      getDefaultModels: () => [],
+    };
+  const listModels = listModelsRegistry[t];
+  return listModels ? { ...base, listModels } : base;
+}
+
+/** True if this provider type uses a single default model in the UI (no API list). */
+export function providerUsesDefaultModelOnly(type: string): boolean {
+  const adapter = getProviderAdapter(type);
+  const models = adapter.getDefaultModels?.({ type, id: '', name: '' } as ConfigProvider);
+  return (models?.length ?? 0) > 0;
+}
+
+/** Canonical provider id for add/update: single-instance types (claude_sdk, cursor) use fixed id; others use the given id. */
+export function getCanonicalProviderId(type: string, existingId?: string): string {
+  const t = (type ?? '').toLowerCase();
+  if (t === 'claude_sdk') return 'claude_sdk';
+  if (t === 'cursor') return 'cursor';
+  return existingId ?? '';
+}
 
 function getEnv(name: string): string {
   return (typeof process !== 'undefined' && process.env?.[name]) ?? '';
@@ -241,6 +343,8 @@ export type ProviderListItem = {
   models: ProviderModel[];
   configured: boolean;
   url?: string;
+  /** When true, UI should use getDefaultModels (e.g. single "Default") instead of fetching model list. */
+  useDefaultModelOnly?: boolean;
 };
 
 /** Returns provider options for the current context: only providers you have added in config (global + project). No built-in list. */
@@ -251,37 +355,13 @@ export function getAllProviders(projectRoot: string): {
   const c = loadConfig(projectRoot);
   const globalConfig = loadGlobalConfig();
   const customProviderList = globalConfig.providers ?? [];
-  const runpodEnv = getRunpodEnv(projectRoot);
   const customProviders: ProviderListItem[] = customProviderList.map((p) => {
     const type = (p.type ?? '').toLowerCase();
-    let configured = false;
-    let url: string | undefined;
-    if (type === 'openai') {
-      configured = !!p.secret_ref?.trim() || !!p.base_url?.trim();
-      url = p.base_url ?? undefined;
-    } else if (type === 'anthropic') {
-      configured = !!p.secret_ref?.trim();
-    } else if (type === 'bedrock') {
-      configured = !!p.aws_profile?.trim() || isBedrockConfigured(projectRoot, p.id);
-    } else if (type === 'runpod') {
-      const podId = (p as { runpod_pod_id?: string }).runpod_pod_id?.trim();
-      configured = !!podId || !!p.secret_ref?.trim();
-      url = podId
-        ? `https://${podId}-8000.proxy.runpod.net/v1`
-        : runpodEnv.baseUrl || undefined;
-    } else if (type === 'ollama') {
-      configured = !!(p.base_url?.trim());
-      url = p.base_url ?? undefined;
-    } else if (type === 'claude_sdk') {
-      // Claude SDK supports keyless auth (e.g. claude auth); no secret or path required
-      configured = true;
-    } else if (type === 'cursor') {
-      // Cursor agent uses CLI (agent --print); no secret required, path optional
-      configured = true;
-    } else {
-      configured = !!p.secret_ref?.trim();
-      url = p.base_url ?? undefined;
-    }
+    const adapter = getProviderAdapter(type);
+    const configured = adapter.isConfigured(projectRoot, p);
+    const url = adapter.getDisplayUrl?.(projectRoot, p);
+    const defaultModels = adapter.getDefaultModels?.(p);
+    const useDefaultModelOnly = (defaultModels?.length ?? 0) > 0;
     return {
       id: p.id,
       name: p.name,
@@ -290,6 +370,7 @@ export function getAllProviders(projectRoot: string): {
       models: p.models ?? [],
       configured,
       url,
+      useDefaultModelOnly,
     };
   });
   const providers = customProviders;

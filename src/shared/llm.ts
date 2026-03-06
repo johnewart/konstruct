@@ -20,6 +20,7 @@ import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { runSdkQuery, type McpProgressStore } from '../agent/claude-sdk-agent';
 import { runCursorAgent } from '../agent/cursor-cli-agent';
+import { ensureCursorMcpConfig } from './cursorMcpConfig';
 import * as fs from 'node:fs';
 import { createLogger } from './logger';
 
@@ -110,6 +111,140 @@ type OpenAIChatResponse = {
   }>;
 };
 
+type ChatOptions = {
+  model?: string;
+  tools?: ToolDefinition[];
+  providerId?: string;
+  projectRoot?: string;
+  signal?: AbortSignal;
+  sessionId?: string;
+  progressStore?: McpProgressStore;
+  timeoutMs?: number;
+  onMcpToolComplete?: (toolCallHistory: Array<{ id: string; name: string; arguments: string; result: string }>) => void;
+};
+
+type ChatResponse = {
+  content: string;
+  toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+  toolCallHistory?: Array<{ id: string; name: string; arguments: string; result: string }>;
+};
+
+type ChatHandler = (
+  messages: ChatMessage[],
+  options: ChatOptions,
+  providerId: string,
+  projectRoot: string,
+  provider: { type?: string; default_model?: string } | undefined
+) => Promise<ChatResponse>;
+
+function buildMessagesPrompt(messages: ChatMessage[]): string {
+  return messages
+    .map((m) => {
+      if (m.role === 'system') return `[System]\n${m.content}`;
+      if (m.role === 'user') return `[User]\n${m.content}`;
+      if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+const CHAT_HANDLERS: Record<string, ChatHandler> = {
+  claude_sdk: async (messages, options, providerId, projectRoot, provider) => {
+    const prompt = buildMessagesPrompt(messages);
+    const apiKey =
+      (await resolveProviderSecret(projectRoot, providerId)) ??
+      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
+      '';
+    const env = { ...process.env } as Record<string, string | undefined>;
+    if (!apiKey) delete env.ANTHROPIC_API_KEY;
+    else env.ANTHROPIC_API_KEY = apiKey;
+    const sdkPath = getClaudeSdkPath(projectRoot, providerId);
+    const requestedModel = options.model ?? provider?.default_model;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedModel ?? '');
+    const model = !requestedModel || requestedModel === 'default' || isUuid ? undefined : requestedModel;
+    const cwd = projectRoot || undefined;
+    const mcpBaseUrl =
+      (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost:3001';
+    const mcpServers: Record<string, { type: 'sse'; url: string }> =
+      cwd
+        ? {
+            konstruct: {
+              type: 'sse',
+              url: `${mcpBaseUrl.replace(/\/$/, '')}/mcp?projectRoot=${encodeURIComponent(cwd)}&mode=implementation${options.sessionId ? `&konstructSessionId=${encodeURIComponent(options.sessionId)}` : ''}`,
+            },
+          }
+        : {};
+    const sdkTimeoutMs =
+      options.timeoutMs ??
+      (typeof process !== 'undefined' && process.env.KONSTRUCT_SDK_TIMEOUT_MS
+        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
+        : 0);
+    const { result, toolCallHistory } = await runSdkQuery(prompt, {
+      cwd,
+      model,
+      env,
+      signal: options.signal,
+      pathToClaudeCodeExecutable: sdkPath,
+      timeoutMs: Number.isNaN(sdkTimeoutMs) ? 0 : sdkTimeoutMs,
+      mcpServers: Object.keys(mcpServers).length ? mcpServers : undefined,
+      bypassPermissions: Object.keys(mcpServers).length > 0,
+      sessionId: options.sessionId,
+      progressStore: options.progressStore,
+      onMcpToolComplete: options.onMcpToolComplete,
+    });
+    return { content: result, toolCalls: undefined, toolCallHistory };
+  },
+  cursor: async (messages, options, providerId, projectRoot, provider) => {
+    log.debug('cursor provider: projectRoot', projectRoot ?? '(empty)');
+    if (projectRoot) ensureCursorMcpConfig(projectRoot);
+    const prompt = buildMessagesPrompt(messages);
+    const cursorPath = getCursorAgentPath(projectRoot, providerId);
+    const model = options.model ?? provider?.default_model ?? undefined;
+    log.debug('cursor provider: binary', cursorPath ?? '(default from PATH)', 'cwd', projectRoot || undefined, 'model', model ?? '(default)', 'sessionId', options.sessionId ?? '(none)');
+    const apiKey = await resolveProviderSecret(projectRoot, providerId);
+    const env = typeof process !== 'undefined' && process.env ? { ...process.env } as Record<string, string | undefined> : undefined;
+    if (env) {
+      if (apiKey?.trim()) env.CURSOR_API_KEY = apiKey;
+      else delete env.CURSOR_API_KEY;
+    }
+    const timeoutMs =
+      options.timeoutMs ??
+      (typeof process !== 'undefined' && process.env?.KONSTRUCT_SDK_TIMEOUT_MS
+        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
+        : 0);
+    const result = await runCursorAgent(prompt, {
+      cursorPath: cursorPath ?? undefined,
+      cwd: projectRoot || undefined,
+      model: model ?? undefined,
+      sessionId: options.sessionId ?? undefined,
+      timeoutMs: Number.isNaN(timeoutMs) ? 0 : timeoutMs,
+      env,
+    });
+    return { content: result, toolCalls: undefined, toolCallHistory: undefined };
+  },
+  anthropic: async (messages, options, _providerId, projectRoot, _provider) => {
+    return anthropic.chat(messages, {
+      model: options.model,
+      tools: options.tools,
+      projectRoot,
+      providerId: options.providerId ?? 'anthropic',
+      signal: options.signal,
+      sessionId: options.sessionId,
+    });
+  },
+  bedrock: async (messages, options, _providerId, _projectRoot, _provider) => {
+    return bedrock.chat(messages, {
+      model: options.model,
+      tools: options.tools,
+      projectRoot: options.projectRoot ?? '',
+      providerId: options.providerId ?? 'bedrock',
+      signal: options.signal,
+      sessionId: options.sessionId,
+    });
+  },
+};
+
 export async function chat(
   messages: ChatMessage[],
   options?: {
@@ -139,16 +274,16 @@ export async function chat(
   const providerId = options?.providerId ?? 'openai';
   const projectRoot = options?.projectRoot ?? '';
 
-  let provider: { type?: string } | undefined;
+  let provider: { type?: string; default_model?: string } | undefined;
   try {
     const config = projectRoot ? loadConfig(projectRoot) : { providers: [] as Array<{ id?: string; type?: string }> };
     provider = providerId ? getProviderById(config, providerId) : undefined;
   } catch (e) {
     log.warn('Could not load config for provider lookup', e);
   }
-  const isBedrock = (provider?.type?.toLowerCase() === 'bedrock') || (providerId === 'bedrock');
-  const isClaudeSdk = (provider?.type?.toLowerCase() === 'claude_sdk') || (providerId === 'claude_sdk');
-  const isCursor = (provider?.type?.toLowerCase() === 'cursor') || (providerId === 'cursor');
+
+  const type = (provider?.type ?? providerId).toLowerCase();
+  const chatHandler = CHAT_HANDLERS[type];
 
   debugLlmLogRequest(messages, {
     providerId,
@@ -157,122 +292,10 @@ export async function chat(
     sessionId: options?.sessionId,
   });
 
-  if (isClaudeSdk) {
-    const prompt = messages
-      .map((m) => {
-        if (m.role === 'system') return `[System]\n${m.content}`;
-        if (m.role === 'user') return `[User]\n${m.content}`;
-        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-    const apiKey =
-      (await resolveProviderSecret(projectRoot, providerId)) ??
-      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
-      '';
-    const env = { ...process.env } as Record<string, string | undefined>;
-    if (!apiKey) delete env.ANTHROPIC_API_KEY;
-    else env.ANTHROPIC_API_KEY = apiKey;
-    const sdkPath = getClaudeSdkPath(projectRoot, providerId);
-    const defaultModel = (provider as { default_model?: string } | undefined)?.default_model;
-    const requestedModel = options?.model ?? defaultModel;
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedModel ?? '');
-    const model = !requestedModel || requestedModel === 'default' || isUuid ? undefined : requestedModel;
-    const cwd = projectRoot || undefined;
-    const mcpBaseUrl =
-      (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost:3001';
-    const mcpServers: Record<string, { type: 'sse'; url: string }> =
-      cwd
-        ? {
-            konstruct: {
-              type: 'sse',
-              url: `${mcpBaseUrl.replace(/\/$/, '')}/mcp?projectRoot=${encodeURIComponent(cwd)}&mode=implementation${options?.sessionId ? `&konstructSessionId=${encodeURIComponent(options.sessionId)}` : ''}`,
-            },
-          }
-        : {};
-    const sdkTimeoutMs =
-      options?.timeoutMs ??
-      (typeof process !== 'undefined' && process.env.KONSTRUCT_SDK_TIMEOUT_MS
-        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
-        : 0);
-    const { result, toolCallHistory } = await runSdkQuery(prompt, {
-      cwd,
-      model,
-      env,
-      signal: options?.signal,
-      pathToClaudeCodeExecutable: sdkPath,
-      timeoutMs: Number.isNaN(sdkTimeoutMs) ? 0 : sdkTimeoutMs,
-      mcpServers: Object.keys(mcpServers).length ? mcpServers : undefined,
-      bypassPermissions: Object.keys(mcpServers).length > 0,
-      sessionId: options?.sessionId,
-      progressStore: options?.progressStore,
-      onMcpToolComplete: options?.onMcpToolComplete,
-    });
-    const sdkRes = { content: result, toolCalls: undefined, toolCallHistory };
-    debugLlmLogResponse(sdkRes);
-    return sdkRes;
-  }
-
-  if (isCursor) {
-    const prompt = messages
-      .map((m) => {
-        if (m.role === 'system') return `[System]\n${m.content}`;
-        if (m.role === 'user') return `[User]\n${m.content}`;
-        if (m.role === 'assistant') return `[Assistant]\n${m.content}`;
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n\n');
-    const cursorPath = getCursorAgentPath(projectRoot, providerId);
-    const defaultModel = (provider as { default_model?: string } | undefined)?.default_model;
-    const model = options?.model ?? defaultModel ?? undefined;
-    const apiKey = await resolveProviderSecret(projectRoot, providerId);
-    const env = typeof process !== 'undefined' && process.env ? { ...process.env } as Record<string, string | undefined> : undefined;
-    if (env) {
-      if (apiKey?.trim()) env.CURSOR_API_KEY = apiKey;
-      else delete env.CURSOR_API_KEY;
-    }
-    const timeoutMs =
-      options?.timeoutMs ??
-      (typeof process !== 'undefined' && process.env?.KONSTRUCT_SDK_TIMEOUT_MS
-        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
-        : 0);
-    const result = await runCursorAgent(prompt, {
-      cursorPath: cursorPath ?? undefined,
-      cwd: projectRoot || undefined,
-      model: model ?? undefined,
-      timeoutMs: Number.isNaN(timeoutMs) ? 0 : timeoutMs,
-      env,
-    });
-    const cursorRes = { content: result, toolCalls: undefined as undefined, toolCallHistory: undefined as undefined };
-    debugLlmLogResponse(cursorRes);
-    return cursorRes;
-  }
-
-  if (providerId === 'anthropic') {
-    const anthropicRes = await anthropic.chat(messages, {
-      model: options?.model,
-      tools: options?.tools,
-      projectRoot,
-      providerId,
-      signal: options?.signal,
-      sessionId: options?.sessionId,
-    });
-    debugLlmLogResponse(anthropicRes);
-    return anthropicRes;
-  }
-  if (isBedrock) {
-    const bedrockRes = await bedrock.chat(messages, {
-      model: options?.model,
-      tools: options?.tools,
-      projectRoot,
-      providerId,
-      signal: options?.signal,
-      sessionId: options?.sessionId,
-    });
-    debugLlmLogResponse(bedrockRes);
-    return bedrockRes;
+  if (chatHandler) {
+    const res = await chatHandler(messages, options ?? {}, providerId, projectRoot, provider);
+    debugLlmLogResponse(res);
+    return res;
   }
 
   const isOllama = providerId === 'ollama';

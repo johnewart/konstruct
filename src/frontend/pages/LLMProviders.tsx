@@ -548,27 +548,26 @@ export function LLMProvidersPage() {
               <Group justify="space-between">
                 <Text size="sm" c="dimmed">Model name and context window (for max_tokens)</Text>
                 <Group gap="xs">
-                  {['openai', 'anthropic', 'bedrock', 'runpod'].includes(editing.type) && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      leftSection={<IconRefresh size={14} />}
-                      loading={refreshModelsMutation.isPending}
-                      onClick={() => {
-                        setRefreshModelsError(null);
-                        refreshModelsMutation.mutate(
-                          { scope: editing.scope, providerId: editing.id },
-                          {
-                            onSuccess: (res) => {
-                              if (res.error) setRefreshModelsError(res.error);
-                            },
-                          }
-                        );
-                      }}
-                    >
-                      Refresh from API
-                    </Button>
-                  )}
+                  <Button
+                    variant="light"
+                    size="xs"
+                    leftSection={<IconRefresh size={14} />}
+                    loading={refreshModelsMutation.isPending}
+                    onClick={() => {
+                      setRefreshModelsError(null);
+                      refreshModelsMutation.mutate(
+                        { scope: editing.scope, providerId: editing.id },
+                        {
+                          onSuccess: (res) => {
+                            if (res.error) setRefreshModelsError(res.error);
+                          },
+                        }
+                      );
+                    }}
+                    aria-label="Refresh model list"
+                  >
+                    Refresh model list
+                  </Button>
                   <Button variant="light" size="xs" leftSection={<IconPlus size={14} />} onClick={openAddModel}>
                     Add model
                   </Button>

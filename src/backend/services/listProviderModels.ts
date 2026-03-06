@@ -16,18 +16,41 @@
 
 import type { ConfigProvider, ProviderModel } from '../../shared/config';
 import { loadConfig, getProviderById, resolveProviderSecret } from '../../shared/config';
+import { getProviderAdapter, getCursorAgentPath, registerListModels, type ListModelsResult } from '../../shared/providers';
+import { listCursorModels } from '../../agent/cursor-cli-agent';
 import { createLogger } from '../../shared/logger';
 
 const log = createLogger('listProviderModels');
 
-export type ListModelsResult = { models: ProviderModel[]; error?: string };
+export type { ListModelsResult } from '../../shared/providers';
 
 const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
 const ANTHROPIC_VERSION = '2023-06-01';
 
+registerListModels('openai', (projectRoot, providerId, provider) =>
+  listOpenAICompatible(projectRoot, providerId, provider, undefined)
+);
+registerListModels('runpod', (projectRoot, providerId, provider) => {
+  const podId = (provider as { runpod_pod_id?: string }).runpod_pod_id?.trim();
+  const baseUrl = podId
+    ? `https://${podId}-8000.proxy.runpod.net/v1`
+    : (provider.base_url ?? '').trim() || undefined;
+  return listOpenAICompatible(projectRoot, providerId, provider, baseUrl);
+});
+registerListModels('anthropic', listAnthropic);
+registerListModels('bedrock', listBedrock);
+registerListModels('claude_sdk', async () => ({ models: [] }));
+registerListModels('cursor', async (projectRoot, providerId) => {
+  const cursorPath = getCursorAgentPath(projectRoot, providerId);
+  const models = await listCursorModels({
+    cursorPath: cursorPath ?? undefined,
+    cwd: projectRoot || undefined,
+  });
+  return { models };
+});
+
 /**
- * Fetch available models from the provider's API. Supports OpenAI-compatible (OpenAI, RunPod, etc.),
- * Anthropic, and AWS Bedrock (ListFoundationModels).
+ * Fetch available models from the provider's API via its adapter.
  */
 export async function listProviderModels(
   projectRoot: string,
@@ -39,28 +62,9 @@ export async function listProviderModels(
     return { models: [], error: `Provider "${providerId}" not found` };
   }
   const type = (provider.type ?? '').toLowerCase();
-
-  if (type === 'openai') {
-    return listOpenAICompatible(projectRoot, providerId, provider, undefined);
-  }
-  if (type === 'runpod') {
-    const podId = (provider as { runpod_pod_id?: string }).runpod_pod_id?.trim();
-    const baseUrl = podId
-      ? `https://${podId}-8000.proxy.runpod.net/v1`
-      : (provider.base_url ?? '').trim() || undefined;
-    return listOpenAICompatible(projectRoot, providerId, provider, baseUrl);
-  }
-  if (type === 'anthropic') {
-    return listAnthropic(projectRoot, providerId, provider);
-  }
-  if (type === 'bedrock') {
-    return listBedrock(projectRoot, providerId, provider);
-  }
-  if (type === 'claude_sdk') {
-    return { models: [] }; // Claude SDK uses Claude Code's model selection; no API to list
-  }
-  if (type === 'cursor') {
-    return { models: [] }; // Cursor agent uses CLI; optional agent --list-models for future
+  const adapter = getProviderAdapter(type);
+  if (adapter.listModels) {
+    return adapter.listModels(projectRoot, providerId, provider);
   }
   return { models: [], error: `Listing models for type "${type}" is not supported` };
 }

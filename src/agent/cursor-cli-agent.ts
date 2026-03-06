@@ -20,6 +20,9 @@
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('cursor-agent');
 
 const DEFAULT_CURSOR_AGENT_PATH =
   process.env.CURSOR_AGENT_PATH ?? 'agent';
@@ -31,6 +34,8 @@ export interface CursorAgentOptions {
   cwd?: string;
   /** Model override (--model). */
   model?: string;
+  /** Session id for --resume so the CLI uses the correct session context. */
+  sessionId?: string;
   /** Run in read-only Q&A mode (--mode ask). */
   modeAsk?: boolean;
   /** Request timeout in ms. No timeout if not set. */
@@ -53,6 +58,9 @@ function buildArgs(options: CursorAgentOptions, prompt: string): string[] {
   }
   if (options.model?.trim()) {
     args.push('--model', options.model.trim());
+  }
+  if (options.sessionId?.trim()) {
+    args.push('--resume', options.sessionId.trim());
   }
   if (options.modeAsk) {
     args.push('--mode', 'ask');
@@ -80,6 +88,12 @@ export function invokeCursorAgent(
   };
 
   const args = buildArgs(options, prompt);
+  const cwd = spawnOpts.cwd ?? process.cwd();
+  log.debug('cursor agent: binary', agentPath, 'cwd', cwd, 'args', args.slice(0, -1), 'promptLength', typeof prompt === 'string' ? prompt.length : 0);
+  if (options.env && Object.keys(options.env).length > 0) {
+    const envKeys = Object.keys(options.env).filter((k) => k.startsWith('CURSOR_') || k.startsWith('KONSTRUCT_'));
+    if (envKeys.length) log.debug('cursor agent: env overrides', envKeys);
+  }
   const child = spawn(agentPath, args, spawnOpts);
 
   let stdout = '';
@@ -138,4 +152,101 @@ export async function runCursorAgent(
     throw err;
   }
   return result.stdout;
+}
+
+export interface CursorModel {
+  id: string;
+  name: string;
+}
+
+/**
+ * Run the Cursor CLI with --list-models and parse the output.
+ * Returns a list of models; on failure returns empty list and does not throw.
+ */
+export async function listCursorModels(
+  options: CursorAgentOptions & { cursorPath?: string } = {}
+): Promise<CursorModel[]> {
+  const agentPath = options.cursorPath ?? DEFAULT_CURSOR_AGENT_PATH;
+  const env = { ...process.env, ...options.env };
+  const spawnOpts: SpawnOptions = {
+    cwd: options.cwd ?? process.cwd(),
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  };
+
+  const child = spawn(agentPath, ['--list-models'], spawnOpts);
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+
+  const result = await new Promise<CursorAgentResult>((resolve) => {
+    child.on('close', (code, signal) => {
+      resolve({
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        exitCode: code,
+      });
+    });
+    child.on('error', (err) => {
+      resolve({
+        stdout: stdout.trim(),
+        stderr: (err?.message ?? String(err)) + (stderr ? `\n${stderr}` : ''),
+        exitCode: null,
+      });
+    });
+  });
+
+  if (result.exitCode !== 0) {
+    return [];
+  }
+
+  const text = result.stdout;
+  if (!text) return [];
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((m): m is { id?: string; name?: string } => m != null && typeof m === 'object')
+        .map((m) => ({
+          id: String(m.id ?? m.name ?? '').trim() || 'default',
+          name: String(m.name ?? m.id ?? '').trim() || 'default',
+        }))
+        .filter((m) => m.id);
+    }
+    const obj = parsed as Record<string, unknown>;
+    const arr = obj.models ?? obj.list;
+    if (Array.isArray(arr)) {
+      return arr
+        .filter((m): m is string | { id?: string; name?: string } => m != null)
+        .map((m) =>
+          typeof m === 'string'
+            ? { id: m.trim(), name: m.trim() }
+            : {
+                id: String((m as { id?: string; name?: string }).id ?? (m as { id?: string; name?: string }).name ?? '').trim() || 'default',
+                name: String((m as { id?: string; name?: string }).name ?? (m as { id?: string; name?: string }).id ?? '').trim() || 'default',
+              }
+        )
+        .filter((m) => m.id);
+    }
+  } catch {
+    // Not JSON: parse plain-text output (skip header, strip " - display name", filter blank and Tip line)
+  }
+  const lines = text.split(/\r?\n/);
+  const skipLeading = 2;
+  const modelLines = lines
+    .slice(skipLeading)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !s.startsWith('Tip'));
+  return modelLines.map((line) => {
+    const dashIdx = line.indexOf(' -');
+    const id = (dashIdx >= 0 ? line.slice(0, dashIdx) : line).trim();
+    const name = (dashIdx >= 0 ? line.slice(dashIdx + 2).trim() : line).trim() || id;
+    return { id: id || 'default', name: name || id };
+  }).filter((m) => m.id);
 }

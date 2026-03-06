@@ -28,6 +28,10 @@
  *   projectRoot  - absolute path for tool path resolution (default: cwd)
  *   mode         - Konstruct mode whose toolset to expose (default: implementation = all tools)
  *   allowedTools - optional comma-separated list of tool names; when set, only these tools from the mode are exposed (e.g. for limiting Claude to a subset)
+ *
+ * Headers on GET /mcp (e.g. from Cursor .cursor/mcp.json):
+ *   X-Allowed-Tools - comma-separated tool names; when set, only these tools are exposed (overrides X-Agent-Name if both present).
+ *   X-Agent-Name    - agent preset name; when set, only tools for that preset are exposed. Presets: "minimal" (read-only: list_files, read_file_region, grep, glob, codebase_outline, search_code), "full" (all tools). Use "${env:KONSTRUCT_AGENT_NAME}" in mcp.json so Cursor sends the env value.
  */
 
 import '../agent/tools/runners.ts'; // register all tool implementations
@@ -50,6 +54,12 @@ interface McpSession {
 }
 
 const sessions = new Map<string, McpSession>();
+
+/** Preset tool lists by agent name; used when X-Agent-Name header is set. */
+const AGENT_NAME_TOOLS: Record<string, string[]> = {
+  minimal: ['list_files', 'read_file_region', 'grep', 'glob', 'codebase_outline', 'search_code'],
+  full: [], // empty = no filter = all tools
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -171,11 +181,24 @@ export function handleMcpSse(
   const projectRoot = url.searchParams.get('projectRoot') ?? process.cwd();
   const modeId = url.searchParams.get('mode') ?? 'implementation';
   const konstructSessionId = url.searchParams.get('konstructSessionId') ?? undefined;
+  let allowedTools: Set<string> | undefined;
   const allowedToolsParam = url.searchParams.get('allowedTools');
-  const allowedTools =
-    allowedToolsParam?.length
-      ? new Set(allowedToolsParam.split(',').map((s) => s.trim()).filter(Boolean))
-      : undefined;
+  if (allowedToolsParam?.length) {
+    allowedTools = new Set(allowedToolsParam.split(',').map((s) => s.trim()).filter(Boolean));
+  } else {
+    const xAllowed = req.headers['x-allowed-tools'];
+    const allowedHeader = Array.isArray(xAllowed) ? xAllowed[0] : xAllowed;
+    if (allowedHeader?.length) {
+      allowedTools = new Set(allowedHeader.split(',').map((s) => s.trim()).filter(Boolean));
+    } else {
+      const xAgent = req.headers['x-agent-name'];
+      const agentHeader = Array.isArray(xAgent) ? xAgent[0] : xAgent;
+      if (agentHeader?.length) {
+        const preset = AGENT_NAME_TOOLS[agentHeader.trim().toLowerCase()];
+        if (preset !== undefined) allowedTools = preset.length ? new Set(preset) : undefined;
+      }
+    }
+  }
   const baseUrl = getBaseUrl(req);
   const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${mcpSessionId}`;
 
