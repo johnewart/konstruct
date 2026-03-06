@@ -16,38 +16,15 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { Worker } from 'worker_threads';
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc/trpc';
 import { getGitRepoPath } from '../git';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('codebase');
 
 /** Cache TTL: dependency graph entries expire after 1 hour. */
 const CACHE_TTL_MS = 60 * 60 * 1000;
-/** Max files to include in a single graph build. */
-const CODE_EXPLORER_MAX_FILES = 5000;
-/** Map of supported languages to their file extensions. */
-const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
-  python: ['.py'],
-  javascript: ['.js', '.mjs', '.cjs', '.jsx'],
-  typescript: ['.ts', '.tsx'],
-};
-/** All extensions the analyzer can currently handle. */
-const ALL_PARSABLE_EXTENSIONS: string[] = Object.values(LANGUAGE_EXTENSIONS).flat();
-/** Directories to skip during file discovery. */
-const SKIP_DIRS: string[] = [
-  'node_modules',
-  '__pycache__',
-  '.venv',
-  'venv',
-  '.env',
-  'build',
-  'dist',
-  '.git',
-  '.tox',
-  '.mypy_cache',
-  '.pytest_cache',
-  'coverage',
-];
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +38,7 @@ type CachedGraph = {
   cachedAt: number;
 };
 
-type BuildState =
+export type BuildState =
   | {
       phase: 'discovering' | 'parsing_defs' | 'parsing_refs';
       filesProcessed: number;
@@ -72,14 +49,6 @@ type BuildState =
     }
   | { phase: 'error'; error: string };
 
-// Worker message types
-type WorkerMessage =
-  | { type: 'dir'; dir: string; filesFound: number; directoriesScannedSoFar?: number }
-  | { type: 'discovery_complete'; directories: string[]; fileCount: number }
-  | { type: 'progress'; phase: 'defs' | 'refs'; filesProcessed: number; totalFiles: number }
-  | { type: 'done'; nodes: NodeResult[]; edges: EdgeResult[]; truncated: boolean }
-  | { type: 'error'; message: string };
-
 // ─── In-memory state ─────────────────────────────────────────────────────────
 
 const graphCache   = new Map<string, CachedGraph>();
@@ -88,6 +57,17 @@ const buildStateMap = new Map<string, BuildState>();
 let currentBuildKey: string | null = null;
 /** Keys invalidated while a build was in-flight; that build must not overwrite the cache. */
 const invalidatedKeys = new Set<string>();
+/** Map workspace id (agent's WORKSPACE_ID) to graph cache key so progress updates hit the right key. */
+const buildKeyByWorkspaceId = new Map<string, string>();
+const keyToWorkspaceId = new Map<string, string>();
+
+function clearBuildKeyMappingForKey(key: string): void {
+  const wid = keyToWorkspaceId.get(key);
+  if (wid) {
+    buildKeyByWorkspaceId.delete(wid);
+    keyToWorkspaceId.delete(key);
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -112,8 +92,14 @@ function fileId(relPath: string): string {
 }
 
 /** Key for the full-project graph (scanner always builds this; path is only for filtering). */
-function fullGraphKey(projectRoot: string): string {
+export function fullGraphKey(projectRoot: string): string {
   return cacheKey(projectRoot, '.');
+}
+
+/** Called when the workspace agent sends codebase_progress; updates buildStateMap for the UI. */
+export function pushCodebaseProgress(workspaceId: string, state: BuildState): void {
+  const key = buildKeyByWorkspaceId.get(workspaceId) ?? fullGraphKey(workspaceId);
+  buildStateMap.set(key, state);
 }
 
 const DEPENDENCY_GRAPH_CACHE_FILENAME = 'dependency-graph.json';
@@ -189,130 +175,6 @@ function filterGraphByPath(
 }
 
 /**
- * Spawn a worker thread that discovers + analyzes files, posting progress
- * messages back.  Updates `buildStateMap` and `graphCache` as messages arrive.
- */
-function spawnAnalysisWorker(
-  key: string,
-  targetDir: string,
-  stripPrefix: string,
-): void {
-  const workerPath = new URL(
-    '../workers/codebaseAnalyzer.worker.ts',
-    import.meta.url,
-  );
-
-  const worker = new Worker(workerPath, {
-    // Use the same tsx loader the main process uses so .ts imports resolve.
-    execArgv: ['--import', 'tsx'],
-    workerData: {
-      targetDir,
-      languageExtensions: LANGUAGE_EXTENSIONS,
-      extensions:         ALL_PARSABLE_EXTENSIONS,
-      maxFiles:           CODE_EXPLORER_MAX_FILES,
-      skipDirs:           SKIP_DIRS,
-      stripPrefix,
-    },
-  });
-
-  worker.on('message', (msg: WorkerMessage) => {
-    switch (msg.type) {
-      case 'dir':
-        // A new directory was entered during discovery — update progress and log (main process so it appears in server output)
-        console.log(`[codebase] Scanning directory: ${msg.dir}`);
-        {
-          const prev = buildStateMap.get(key);
-          const state = prev ?? { phase: 'discovering' as const, filesProcessed: 0, totalFiles: 0 };
-          if (state.phase !== 'error') {
-            buildStateMap.set(key, {
-              ...state,
-              phase: 'discovering',
-              filesProcessed: msg.filesFound,
-              totalFiles: state.totalFiles,
-              currentDir: msg.dir,
-              directoryCount: msg.directoriesScannedSoFar ?? state.directoryCount,
-            });
-          }
-        }
-        break;
-
-      case 'discovery_complete':
-        {
-          const prev = buildStateMap.get(key);
-          const state = prev ?? { phase: 'discovering' as const, filesProcessed: 0, totalFiles: 0 };
-          if (state.phase !== 'error') {
-            buildStateMap.set(key, {
-              ...state,
-              phase: 'discovering',
-              filesProcessed: msg.fileCount,
-              totalFiles: msg.fileCount,
-              currentDir: undefined,
-              directoriesScanned: msg.directories,
-              directoryCount: msg.directories.length,
-            });
-          }
-        }
-        break;
-
-      case 'progress':
-        {
-          const prev = buildStateMap.get(key);
-          buildStateMap.set(key, {
-            ...prev,
-            phase:          msg.phase === 'defs' ? 'parsing_defs' : 'parsing_refs',
-            filesProcessed: msg.filesProcessed,
-            totalFiles:     msg.totalFiles,
-          });
-        }
-        break;
-
-      case 'done':
-        if (!invalidatedKeys.has(key)) {
-          const cachedAt = Date.now();
-          const graphData: CachedGraph = {
-            nodes:    msg.nodes,
-            edges:    msg.edges,
-            truncated: msg.truncated,
-            cachedAt,
-          };
-          graphCache.set(key, graphData);
-          const projectRoot = key.replace(/\|\.$/, '');
-          saveGraphCacheToDisk(projectRoot, graphData);
-        }
-        invalidatedKeys.delete(key);
-        buildStateMap.delete(key);
-        if (currentBuildKey === key) currentBuildKey = null;
-        break;
-
-      case 'error':
-        console.error(`[codebase] Worker reported error: ${msg.message}`);
-        buildStateMap.set(key, { phase: 'error', error: msg.message });
-        if (currentBuildKey === key) currentBuildKey = null;
-        break;
-    }
-  });
-
-  worker.on('error', (err) => {
-    console.error(`[codebase] Worker thread error:`, err);
-    buildStateMap.set(key, {
-      phase: 'error',
-      error: err instanceof Error ? err.message : String(err),
-    });
-    if (currentBuildKey === key) currentBuildKey = null;
-  });
-
-  worker.on('exit', (code) => {
-    if (code !== 0 && currentBuildKey === key) {
-      console.error(`[codebase] Worker exited with code ${code}`);
-      if (!buildStateMap.has(key) || (buildStateMap.get(key) as BuildState).phase !== 'error') {
-        buildStateMap.set(key, { phase: 'error', error: `Worker exited with code ${code}` });
-      }
-      currentBuildKey = null;
-    }
-  });
-}
-
-/**
  * Return the cached dependency graph, optionally filtered by path. Used by other
  * routers (e.g. PR overview). Tries in-memory first, then disk (persisted cache).
  */
@@ -355,6 +217,7 @@ export const codebaseRouter = router({
       // ── Serve from cache if fresh (path is only for filtering the view) ──
       const cached = graphCache.get(key);
       if (cached && Date.now() - cached.cachedAt <= CACHE_TTL_MS) {
+        log.info('Serving dependency graph from cache', { workspaceId: key, nodes: cached.nodes.length, edges: cached.edges.length });
         const { nodes, edges } = filterGraphByPath(cached.nodes, cached.edges, pathArg);
         return {
           error: null,
@@ -375,6 +238,7 @@ export const codebaseRouter = router({
       // ── Load from disk (persisted cache) so we don't re-process unless user clicked Rebuild ──
       const diskCache = loadGraphCacheFromDisk(ctx.workspace.getLocalPath() ?? '');
       if (diskCache) {
+        log.info('Serving dependency graph from disk cache', { workspaceId: key, nodes: diskCache.nodes.length, edges: diskCache.edges.length });
         const restored: CachedGraph = { ...diskCache, cachedAt: Date.now() };
         graphCache.set(key, restored);
         const { nodes, edges } = filterGraphByPath(restored.nodes, restored.edges, pathArg);
@@ -399,6 +263,7 @@ export const codebaseRouter = router({
         if (building.phase === 'error') {
           buildStateMap.delete(key);
           if (currentBuildKey === key) currentBuildKey = null;
+          clearBuildKeyMappingForKey(key);
           return {
             error: building.error,
             nodes: [] as NodeResult[],
@@ -427,8 +292,26 @@ export const codebaseRouter = router({
         };
       }
 
-      // ── Another build is already running ──
+      // ── Another build is already running (same or other workspace) ──
       if (currentBuildKey !== null) {
+        if (currentBuildKey === key) {
+          const buildingForKey = buildStateMap.get(key);
+          if (buildingForKey && (buildingForKey as BuildState).phase !== 'error') {
+            return {
+              error: null,
+              nodes: [] as NodeResult[],
+              edges: [] as EdgeResult[],
+              truncated: false,
+              building: true,
+              phase:          (buildingForKey as BuildState).phase as string,
+              filesProcessed: (buildingForKey as BuildState).filesProcessed,
+              totalFiles:      (buildingForKey as BuildState).totalFiles,
+              currentDir:     (buildingForKey as BuildState).currentDir,
+              directoryCount: (buildingForKey as BuildState).directoryCount ?? (buildingForKey as BuildState).directoriesScanned?.length ?? 0,
+              pathStripPrefix: stripPrefix,
+            };
+          }
+        }
         return {
           error: null,
           nodes: [] as NodeResult[],
@@ -443,8 +326,11 @@ export const codebaseRouter = router({
         };
       }
 
-      // ── Kick off a new build: always scan full project root (path is only for filtering) ──
+      // ── Kick off a new build via workspace agent (runs on agent so VM/container has correct filesystem) ──
       currentBuildKey = key;
+      invalidatedKeys.delete(key); // allow this build's result to be cached when it completes
+      buildKeyByWorkspaceId.set(ctx.workspace.id, key);
+      keyToWorkspaceId.set(key, ctx.workspace.id);
       buildStateMap.set(key, {
         phase:          'discovering',
         filesProcessed: 0,
@@ -452,7 +338,45 @@ export const codebaseRouter = router({
         currentDir:     undefined,
       });
 
-      spawnAnalysisWorker(key, ctx.workspace.getLocalPath() ?? '', stripPrefix);
+      const projectRootForCache = ctx.workspace.getLocalPath() ?? '';
+      ctx.workspace.getOrSpawnAgent().then((connection) => {
+        connection.executeTool('buildDependencyGraph', { stripPrefix }).then((result: { result?: string; error?: string }) => {
+          if (result.error) {
+            buildStateMap.set(key, { phase: 'error', error: result.error });
+            if (currentBuildKey === key) currentBuildKey = null;
+            clearBuildKeyMappingForKey(key);
+            return;
+          }
+          let data: { nodes?: NodeResult[]; edges?: EdgeResult[]; truncated?: boolean };
+          try {
+            data = JSON.parse(result.result ?? '{}') as typeof data;
+          } catch {
+            buildStateMap.set(key, { phase: 'error', error: 'Invalid response from agent' });
+            if (currentBuildKey === key) currentBuildKey = null;
+            clearBuildKeyMappingForKey(key);
+            return;
+          }
+          if (!invalidatedKeys.has(key) && Array.isArray(data?.nodes) && Array.isArray(data?.edges)) {
+            const cachedAt = Date.now();
+            const graphData: CachedGraph = {
+              nodes: data.nodes,
+              edges: data.edges,
+              truncated: Boolean(data.truncated),
+              cachedAt,
+            };
+            graphCache.set(key, graphData);
+            saveGraphCacheToDisk(projectRootForCache, graphData);
+          }
+          invalidatedKeys.delete(key);
+          buildStateMap.delete(key);
+          if (currentBuildKey === key) currentBuildKey = null;
+          clearBuildKeyMappingForKey(key);
+        });
+      }).catch((err: unknown) => {
+        buildStateMap.set(key, { phase: 'error', error: err instanceof Error ? err.message : String(err) });
+        if (currentBuildKey === key) currentBuildKey = null;
+        clearBuildKeyMappingForKey(key);
+      });
 
       return {
         error: null,

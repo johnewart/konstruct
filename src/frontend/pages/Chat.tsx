@@ -41,24 +41,14 @@ import {
 } from '@mantine/core';
 import { IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
 
-// Git changes list component
-function GitChangesList() {
-  // Use a ref to track if the component is mounted/visible
-  // This helps reduce unnecessary queries when the accordion is closed
-  const [queryKey, setQueryKey] = useState(0);
-  
-  const { data: isGitAvailable } = trpc.git.isAvailable.useQuery();
+// Git changes list component – only fetches when accordion is expanded
+function GitChangesList({ enabled }: { enabled: boolean }) {
+  const { data: isGitAvailable } = trpc.git.isAvailable.useQuery(undefined, { enabled });
   const { data: gitChanges, isLoading: gitLoading, isError } =
     trpc.git.getChangedFiles.useQuery(undefined, {
-      refetchInterval: 1000, // Auto-refresh every second
-      enabled: isGitAvailable !== false && queryKey > 0, // Only run if git available and component active
+      refetchInterval: enabled ? 10_000 : false, // Poll every 10s only when Git Changes panel is open
+      enabled: enabled && isGitAvailable !== false,
     });
-  
-  // Only start refetching when component mounts
-  useEffect(() => {
-    setQueryKey(1);
-    return () => setQueryKey(0);
-  }, []);
 
   if (isError) {
     // Don't show error in UI - just return empty to avoid cluttering
@@ -254,6 +244,7 @@ export function Chat() {
   const [newSessionTitle, setNewSessionTitle] = useState('');
   // Message queue state
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [rightPanelAccordion, setRightPanelAccordion] = useState<string[]>(['todos']);
 
   const [attachmentsBySession, setAttachmentsBySession] = useState<
     Record<string, PlanAttachment[]>
@@ -1604,7 +1595,7 @@ export function Chat() {
                 </div>
               </div>
               <aside className="chat-right-panel">
-                <Accordion defaultValue={['todos']} multiple>
+                <Accordion value={rightPanelAccordion} onChange={setRightPanelAccordion} multiple>
                   <Accordion.Item value="todos">
                     <Accordion.Control>
                       <h3 className="chat-panel-section__title">Todos</h3>
@@ -1818,7 +1809,7 @@ export function Chat() {
                         padding: '8px 0',
                       }}
                     >
-                      <GitChangesList />
+                      <GitChangesList enabled={rightPanelAccordion.includes('git-changes')} />
                     </Accordion.Panel>
                   </Accordion.Item>
 

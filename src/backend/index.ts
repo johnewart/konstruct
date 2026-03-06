@@ -28,6 +28,7 @@ import * as agentStream from './agentStream';
 import { handleMcpSse, handleMcpMessage } from './mcp';
 import { createLogger } from '../shared/logger';
 import * as workspaceAgentRegistry from './workspaceAgentRegistry';
+import { pushCodebaseProgress, type BuildState } from './routers/codebase';
 
 const log = createLogger('server');
 
@@ -242,6 +243,26 @@ server.on('upgrade', (request, socket, head) => {
             process.stderr.write(line);
           } else {
             process.stdout.write(line);
+          }
+          return;
+        }
+        if (obj.type === 'codebase_progress') {
+          const workspaceId = wsWithId.workspaceId;
+          if (workspaceId) {
+            const payload = obj as { phase?: string; filesProcessed?: number; totalFiles?: number; currentDir?: string; directoryCount?: number; directoriesScanned?: string[]; error?: string };
+            const phase = payload.phase;
+            const state: BuildState =
+              phase === 'error'
+                ? { phase: 'error', error: typeof payload.error === 'string' ? payload.error : 'Unknown error' }
+                : {
+                    phase: (phase === 'parsing_defs' || phase === 'parsing_refs' ? phase : 'discovering') as 'discovering' | 'parsing_defs' | 'parsing_refs',
+                    filesProcessed: typeof payload.filesProcessed === 'number' ? payload.filesProcessed : 0,
+                    totalFiles: typeof payload.totalFiles === 'number' ? payload.totalFiles : 0,
+                    currentDir: payload.currentDir,
+                    directoryCount: payload.directoryCount,
+                    directoriesScanned: payload.directoriesScanned,
+                  };
+            pushCodebaseProgress(workspaceId, state);
           }
           return;
         }

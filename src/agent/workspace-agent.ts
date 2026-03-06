@@ -23,6 +23,8 @@ import WebSocket from 'ws';
 import { registerTool, executeTool, getProjectRoot } from './tools/executor';
 import './tools/runners';
 import * as git from '../backend/git';
+import * as path from 'path';
+import { runDependencyGraphScan, type ScanProgress } from '../shared/codebaseScan';
 
 const projectRoot = process.env.PROJECT_ROOT ?? process.cwd();
 const workspaceId = process.env.WORKSPACE_ID ?? projectRoot;
@@ -68,6 +70,16 @@ registerTool('getComprehensiveDiffStats', (_args, ctx) => {
   return { result: JSON.stringify(obj) };
 });
 
+/** Strip prefix for dependency graph node paths (git root or project root). */
+function getStripPrefix(projectRoot: string): string {
+  const gitRoot = git.getGitRepoPath(projectRoot);
+  let p = path.join(gitRoot ?? projectRoot, '').replace(/\\/g, '/');
+  if (!p.endsWith('/')) p += '/';
+  return p;
+}
+
+let dependencyGraphBuildInProgress = false;
+
 function run(): void {
   const ws = new WebSocket(wsUrl);
   const context = { projectRoot };
@@ -106,7 +118,57 @@ function run(): void {
         sendResponse(undefined, 'missing tool name');
         return;
       }
-      agentLog?.('debug', `executeTool ${name}`);
+
+      if (name === 'buildDependencyGraph') {
+        if (dependencyGraphBuildInProgress) {
+          sendResponse(undefined, 'Dependency graph build already in progress');
+          return;
+        }
+        dependencyGraphBuildInProgress = true;
+        const stripPrefix = (typeof args.stripPrefix === 'string' ? args.stripPrefix : null) ?? getStripPrefix(projectRoot);
+        agentLog?.('info', `Building dependency graph for ${projectRoot}, stripPrefix=${stripPrefix}`);
+        const onProgress = (update: ScanProgress) => {
+          let payload: Record<string, unknown>;
+          switch (update.kind) {
+            case 'dir':
+              agentLog?.('info', `Scanning directory: ${update.dir} (${update.directoriesScannedSoFar ?? 0} dirs, ${update.filesFound} files so far)`);
+              payload = { phase: 'discovering', filesProcessed: update.filesFound, totalFiles: 0, currentDir: update.dir, directoryCount: update.directoriesScannedSoFar };
+              break;
+            case 'discovery_complete':
+              agentLog?.('info', `Discovery complete: ${update.fileCount} files in ${update.directories.length} directories`);
+              payload = { phase: 'discovering', filesProcessed: update.fileCount, totalFiles: update.fileCount, directoriesScanned: update.directories, directoryCount: update.directories.length };
+              break;
+            case 'progress':
+              if (update.filesProcessed === 0) {
+                agentLog?.('info', `Analysis phase: ${update.phase}, ${update.totalFiles} files total`);
+              }
+              payload = { phase: update.phase === 'defs' ? 'parsing_defs' : 'parsing_refs', filesProcessed: update.filesProcessed, totalFiles: update.totalFiles };
+              break;
+            case 'error':
+              payload = { phase: 'error', error: update.message };
+              break;
+            default:
+              return;
+          }
+          send({ type: 'codebase_progress', ...payload });
+        };
+        try {
+          const result = await runDependencyGraphScan(projectRoot, stripPrefix, { onProgress });
+          agentLog?.('info', `Dependency graph built: ${result.nodes.length} file nodes, ${result.edges.length} edges${result.truncated ? ' (truncated)' : ''}`);
+          sendResponse(JSON.stringify({ nodes: result.nodes, edges: result.edges, truncated: result.truncated }));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          onProgress({ kind: 'error', message: msg });
+          sendResponse(undefined, msg);
+        } finally {
+          dependencyGraphBuildInProgress = false;
+        }
+        return;
+      }
+
+      // Log only non-routine tools at debug (skip noisy getChangedFiles / getGitDiff etc.)
+      const quietTools = ['getChangedFiles', 'getGitDiff', 'getStagedFilePaths', 'getComprehensiveDiffStats'];
+      if (!quietTools.includes(name)) agentLog?.('debug', `executeTool ${name}`);
       try {
         const out = await executeTool(name, args, context);
         if (out.error) agentLog?.('warn', `executeTool ${name} error: ${out.error}`);
@@ -126,7 +188,7 @@ function run(): void {
     agentLog?.('info', 'connection closed');
     process.exit(0);
   });
-  ws.on('error', (err) => {
+  ws.on('error', (err: unknown) => {
     if (agentLog) agentLog('error', `WebSocket error: ${err}`);
     process.exit(1);
   });

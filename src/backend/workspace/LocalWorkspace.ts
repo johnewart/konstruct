@@ -15,6 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Workspace, AgentConnection } from '../../shared/workspace';
 import * as registry from '../workspaceAgentRegistry';
@@ -43,11 +44,19 @@ export class LocalWorkspace implements Workspace {
     const existing = registry.get(this.id);
     if (existing) return existing;
 
-    const scriptPath = path.join(process.cwd(), 'src', 'agent', 'workspace-agent.ts');
+    const cwd = process.cwd();
+    const bundlePath = path.join(cwd, 'dist', 'workspace-agent.js');
+    const sourcePath = path.join(cwd, 'src', 'agent', 'workspace-agent.ts');
+    const devMode = process.env.KONSTRUCT_WORKSPACE_AGENT_DEV === '1' || process.env.KONSTRUCT_WORKSPACE_AGENT_DEV === 'true';
+    const useBundle = !devMode && fs.existsSync(bundlePath);
+
+    const scriptPath = useBundle ? bundlePath : sourcePath;
     const node = process.execPath;
+    const args = useBundle ? [scriptPath] : ['--import', 'tsx', scriptPath];
+
     const child = spawn(
       node,
-      ['--import', 'tsx', scriptPath],
+      args,
       {
         env: {
           ...process.env,
