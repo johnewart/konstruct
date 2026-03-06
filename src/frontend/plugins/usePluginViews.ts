@@ -16,11 +16,26 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { trpc } from '../../client/trpc';
-import { PLUGIN_VIEW_IMPORTERS } from './registry';
 import type { PluginViewMeta } from './registry';
 
 export interface PluginViewEntry extends PluginViewMeta {
   id: string;
+}
+
+/** Load view by convention: konstruct-plugin-<id>/view (path, label, default component). */
+function loadPluginView(id: string): Promise<PluginViewEntry | null> {
+  return import(/* @vite-ignore */ `konstruct-plugin-${id}/view`)
+    .then((mod) => {
+      if (!mod?.default || typeof mod.path !== 'string' || typeof mod.label !== 'string')
+        return null;
+      return {
+        id,
+        path: mod.path,
+        label: mod.label,
+        Component: mod.default,
+      };
+    })
+    .catch(() => null);
 }
 
 export function usePluginViews(): {
@@ -44,23 +59,7 @@ export function usePluginViews(): {
     }
     let cancelled = false;
     setLoading(true);
-    Promise.all(
-      enabledIds.map(async (id) => {
-        const importer = PLUGIN_VIEW_IMPORTERS[id];
-        if (!importer) return null;
-        try {
-          const mod = await importer();
-          return {
-            id,
-            path: mod.path,
-            label: mod.label,
-            Component: mod.default,
-          } as PluginViewEntry;
-        } catch {
-          return null;
-        }
-      })
-    ).then((entries) => {
+    Promise.all(enabledIds.map(loadPluginView)).then((entries) => {
       if (!cancelled) {
         setLoaded(entries.filter((e): e is PluginViewEntry => e != null));
       }

@@ -23,17 +23,10 @@ export interface PluginViewMeta {
 }
 
 /**
- * Map plugin id -> dynamic import of the plugin's view entry.
- * Add an entry when adding a plugin dependency, e.g.:
- *   jira: () => import('konstruct-plugin-jira/view'),
+ * Plugin views are loaded by convention: for each enabled plugin id, the app
+ * imports `konstruct-plugin-<id>/view`. That module must export `path`, `label`,
+ * and a default React component. No registry entry needed.
  */
-export const PLUGIN_VIEW_IMPORTERS: Record<
-  string,
-  () => Promise<{ path: string; label: string; default: ComponentType }>
-> = {
-  // Example when konstruct-plugin-jira is installed:
-  // jira: () => import('konstruct-plugin-jira/view'),
-};
 
 /** Props passed to plugin settings panels (see konstruct-sdk PluginSettingsProps). */
 export interface PluginSettingsProps {
