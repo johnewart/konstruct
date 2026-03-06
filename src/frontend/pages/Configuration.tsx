@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Stack, Text, Card, Button, Grid, Box, Switch, Group } from '@mantine/core';
+import { Stack, Text, Card, Button, Grid, Box, Switch, Group, Modal, Loader } from '@mantine/core';
+import { useProjectModel } from '../contexts/ProjectModelContext';
+import { PLUGIN_SETTINGS_IMPORTERS } from '../plugins/registry';
+import type { PluginSettingsProps } from '../plugins/registry';
 import { RunPodPage } from './RunPod';
 import { VMsPage } from './VMs';
 import { ProjectsPage } from './Projects';
@@ -34,6 +38,8 @@ const SECTIONS = [
   { id: 'assistants', label: 'Assistants', description: 'Mode instructions' },
   { id: 'github', label: 'GitHub', description: 'GitHub integration' },
   { id: 'code', label: 'Code', description: 'Code graph and cache' },
+  { id: 'plugins', label: 'Plugins', description: 'Enabled plugins' },
+  { id: 'tools', label: 'Tools', description: 'All known tools' },
 ] as const;
 type TabValue = (typeof SECTIONS)[number]['id'];
 
@@ -42,20 +48,27 @@ function isValidTab(v: string): v is TabValue {
 }
 
 function GeneralSettingsSection() {
-  const { data, isLoading } = trpc.providerConfig.getRunpodManagementEnabled.useQuery();
+  const { data: runpodData, isLoading: runpodLoading } = trpc.providerConfig.getRunpodManagementEnabled.useQuery();
   const setRunpodEnabled = trpc.providerConfig.setRunpodManagementEnabled.useMutation();
+  const { data: vmData, isLoading: vmLoading } = trpc.providerConfig.getVmManagementEnabled.useQuery();
+  const setVmEnabled = trpc.providerConfig.setVmManagementEnabled.useMutation();
   const utils = trpc.useUtils();
-  const enabled = data?.enabled ?? true;
+  const runpodEnabled = runpodData?.enabled ?? false;
+  const vmEnabled = vmData?.enabled ?? false;
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRunpodChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = e.currentTarget.checked;
     setRunpodEnabled.mutate(
       { enabled: next },
-      {
-        onSuccess: () => {
-          void utils.providerConfig.getRunpodManagementEnabled.invalidate();
-        },
-      }
+      { onSuccess: () => void utils.providerConfig.getRunpodManagementEnabled.invalidate() }
+    );
+  };
+
+  const handleVmChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const next = e.currentTarget.checked;
+    setVmEnabled.mutate(
+      { enabled: next },
+      { onSuccess: () => void utils.providerConfig.getVmManagementEnabled.invalidate() }
     );
   };
 
@@ -65,20 +78,32 @@ function GeneralSettingsSection() {
         Settings
       </Text>
       <Text size="sm" c="dimmed">
-        Use the menu on the left to switch between sections: RunPod, projects, LLM providers, assistants, GitHub, and code graph options.
+        Use the menu on the left to switch between sections. Enable the toggles below to show RunPod and VMs in the sidebar.
       </Text>
       <Group justify="space-between">
         <Text size="sm" fw={500}>
           Enable RunPod management
         </Text>
-        {/* Uncontrolled so the native input handles the toggle; we persist on change */}
         <Switch
-          key={`runpod-enabled-${enabled}`}
+          key={`runpod-enabled-${runpodEnabled}`}
           size="md"
-          defaultChecked={enabled}
-          disabled={isLoading}
-          onChange={handleChange}
+          defaultChecked={runpodEnabled}
+          disabled={runpodLoading}
+          onChange={handleRunpodChange}
           aria-label="Enable RunPod management"
+        />
+      </Group>
+      <Group justify="space-between">
+        <Text size="sm" fw={500}>
+          Enable VMs management
+        </Text>
+        <Switch
+          key={`vm-enabled-${vmEnabled}`}
+          size="md"
+          defaultChecked={vmEnabled}
+          disabled={vmLoading}
+          onChange={handleVmChange}
+          aria-label="Enable VMs management"
         />
       </Group>
       <Text size="sm">
@@ -86,6 +111,188 @@ function GeneralSettingsSection() {
           ← Back to Chat
         </Link>
       </Text>
+    </Stack>
+  );
+}
+
+function PluginsSection() {
+  const { projectId } = useProjectModel();
+  const effectiveProjectId = projectId ?? '_default';
+  const [settingsPluginId, setSettingsPluginId] = useState<string | null>(null);
+
+  const { data, isLoading } = trpc.plugins.listAvailable.useQuery();
+  const setPluginEnabled = trpc.plugins.setPluginEnabled.useMutation();
+  const utils = trpc.useUtils();
+  const plugins = data?.plugins ?? [];
+
+  const { data: settingsData } = trpc.plugins.getPluginSettings.useQuery(
+    { projectId: effectiveProjectId, pluginId: settingsPluginId! },
+    { enabled: !!settingsPluginId }
+  );
+  const setPluginSettings = trpc.plugins.setPluginSettings.useMutation();
+
+  const handleToggle = (pluginId: string, enabled: boolean) => {
+    setPluginEnabled.mutate(
+      { pluginId, enabled },
+      {
+        onSuccess: () => {
+          void utils.plugins.listAvailable.invalidate();
+          void utils.plugins.getRestartNeeded.invalidate();
+        },
+      }
+    );
+  };
+
+  const handleOpenSettings = (pluginId: string) => setSettingsPluginId(pluginId);
+  const handleCloseSettings = () => setSettingsPluginId(null);
+
+  const hasSettings = (pluginId: string) => pluginId in PLUGIN_SETTINGS_IMPORTERS;
+
+  return (
+    <Stack gap="md">
+      <Text fw={600} size="sm">
+        Plugins
+      </Text>
+      <Text size="sm" c="dimmed">
+        Enable or disable plugins and configure per-workspace settings. Changes to enabled list take effect after restart.
+      </Text>
+      {isLoading ? (
+        <Text size="sm" c="dimmed">Loading…</Text>
+      ) : plugins.length === 0 ? (
+        <Text size="sm" c="dimmed">No plugins installed. Add packages like <code>konstruct-plugin-example</code> to get started.</Text>
+      ) : (
+        <Stack gap="xs">
+          {plugins.map((p) => (
+            <Card key={p.id} withBorder padding="sm" radius="md">
+              <Group justify="space-between" wrap="nowrap">
+                <Box style={{ flex: 1, minWidth: 0 }}>
+                  <Text fw={500} size="sm">{p.name}</Text>
+                  {p.description && (
+                    <Text size="xs" c="dimmed" mt={4} lineClamp={2}>{p.description}</Text>
+                  )}
+                  <Text size="xs" c="dimmed" mt={2}>ID: {p.id}{p.loaded ? ' · loaded' : p.enabled ? ' · will load on restart' : ''}</Text>
+                </Box>
+                <Group gap="xs" wrap="nowrap">
+                  {hasSettings(p.id) && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      onClick={() => handleOpenSettings(p.id)}
+                      aria-label={`Settings for ${p.name}`}
+                    >
+                      Settings
+                    </Button>
+                  )}
+                  <Switch
+                    size="md"
+                    checked={p.enabled}
+                    onChange={(e) => handleToggle(p.id, e.currentTarget.checked)}
+                    aria-label={`Enable ${p.name}`}
+                  />
+                </Group>
+              </Group>
+            </Card>
+          ))}
+        </Stack>
+      )}
+
+      {settingsPluginId && (
+        <PluginSettingsModal
+          pluginId={settingsPluginId}
+          projectId={effectiveProjectId}
+          settings={settingsData?.settings ?? {}}
+          onSave={(settings) => {
+            setPluginSettings.mutate(
+              { projectId: effectiveProjectId, pluginId: settingsPluginId, settings },
+              {
+                onSuccess: () => {
+                  void utils.plugins.getPluginSettings.invalidate();
+                },
+              }
+            );
+          }}
+          onClose={handleCloseSettings}
+        />
+      )}
+    </Stack>
+  );
+}
+
+function PluginSettingsModal({
+  pluginId,
+  projectId,
+  settings,
+  onSave,
+  onClose,
+}: PluginSettingsProps & { onClose: () => void }) {
+  const loader = PLUGIN_SETTINGS_IMPORTERS[pluginId];
+  const [Component, setComponent] = useState<React.ComponentType<PluginSettingsProps> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loader) {
+      setErr('No settings panel for this plugin');
+      return;
+    }
+    setErr(null);
+    setComponent(null);
+    loader()
+      .then((m) => setComponent(() => m.default))
+      .catch((e) => setErr(e?.message ?? 'Failed to load settings'));
+  }, [pluginId]);
+
+  const handleSave = (next: Record<string, unknown>) => {
+    onSave(next);
+  };
+
+  return (
+    <Modal
+      opened
+      onClose={onClose}
+      title={`Plugin settings: ${pluginId}`}
+      size="md"
+    >
+      {err && <Text size="sm" c="red">{err}</Text>}
+      {!err && !Component && <Loader size="sm" />}
+      {!err && Component && (
+        <Component
+          pluginId={pluginId}
+          projectId={projectId}
+          settings={settings}
+          onSave={handleSave}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function ToolsSection() {
+  const { data, isLoading } = trpc.tools.listAll.useQuery();
+  const tools = data?.tools ?? [];
+  return (
+    <Stack gap="md">
+      <Text fw={600} size="sm">
+        Tools
+      </Text>
+      <Text size="sm" c="dimmed">
+        All tools available to the agent (core and from plugins). Modes expose a subset of these.
+      </Text>
+      {isLoading ? (
+        <Text size="sm" c="dimmed">Loading…</Text>
+      ) : tools.length === 0 ? (
+        <Text size="sm" c="dimmed">No tools.</Text>
+      ) : (
+        <Stack gap="xs">
+          {tools.map((t) => (
+            <Card key={t.name} withBorder padding="sm" radius="md">
+              <Text fw={500} size="sm">{t.name}</Text>
+              {t.description && (
+                <Text size="xs" c="dimmed" mt={4}>{t.description}</Text>
+              )}
+            </Card>
+          ))}
+        </Stack>
+      )}
     </Stack>
   );
 }
@@ -124,10 +331,14 @@ export function ConfigurationPage() {
   const tab = searchParams.get(TAB_KEY);
   const activeTab = isValidTab(tab ?? '') ? tab : 'general';
   const { data: runpodEnabledData } = trpc.providerConfig.getRunpodManagementEnabled.useQuery();
-  const runpodManagementEnabled = runpodEnabledData?.enabled !== false;
-  const visibleSections = runpodManagementEnabled
-    ? SECTIONS
-    : SECTIONS.filter((s) => s.id !== 'runpod');
+  const { data: vmEnabledData } = trpc.providerConfig.getVmManagementEnabled.useQuery();
+  const runpodManagementEnabled = runpodEnabledData?.enabled === true;
+  const vmManagementEnabled = vmEnabledData?.enabled === true;
+  const visibleSections = SECTIONS.filter(
+    (s) =>
+      (s.id !== 'runpod' || runpodManagementEnabled) &&
+      (s.id !== 'vms' || vmManagementEnabled)
+  );
 
   return (
     <Box p="md">
@@ -167,12 +378,15 @@ export function ConfigurationPage() {
             {activeTab === 'general' && <GeneralSettingsSection />}
             {activeTab === 'runpod' && runpodManagementEnabled && <RunPodPage />}
             {activeTab === 'runpod' && !runpodManagementEnabled && <GeneralSettingsSection />}
-            {activeTab === 'vms' && <VMsPage />}
+            {activeTab === 'vms' && vmManagementEnabled && <VMsPage />}
+            {activeTab === 'vms' && !vmManagementEnabled && <GeneralSettingsSection />}
             {activeTab === 'projects' && <ProjectsPage />}
             {activeTab === 'providers' && <LLMProvidersPage />}
             {activeTab === 'assistants' && <AssistantInstructionsPage />}
             {activeTab === 'github' && <GitHubConfigPage />}
             {activeTab === 'code' && <CodeConfigSection />}
+            {activeTab === 'plugins' && <PluginsSection />}
+            {activeTab === 'tools' && <ToolsSection />}
           </Box>
         </Grid.Col>
       </Grid>

@@ -60,6 +60,16 @@ export function registerTool(name: string, fn: Runner) {
   runners[name] = fn;
 }
 
+/** Remove a tool (e.g. when a plugin is disabled). */
+export function unregisterTool(name: string): void {
+  delete runners[name];
+}
+
+/** Remove multiple tools by name. */
+export function unregisterTools(names: string[]): void {
+  for (const name of names) delete runners[name];
+}
+
 export function executeTool(
   name: string,
   args: Record<string, unknown>,

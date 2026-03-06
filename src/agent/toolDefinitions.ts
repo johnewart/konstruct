@@ -16,6 +16,7 @@
 
 import type { ToolDefinition } from '../shared/llm';
 import { getMode } from './modes';
+import { getPluginToolDefinitions as getPluginDefs } from '../backend/plugins/registry';
 
 const ALL_TOOL_DEFS: ToolDefinition[] = [
   {
@@ -432,12 +433,18 @@ for (const t of ALL_TOOL_DEFS) {
   toolsByName.set(t.function.name, t);
 }
 
+export function getAllToolDefinitions(): ToolDefinition[] {
+  return [...ALL_TOOL_DEFS, ...getPluginDefs()];
+}
+
 export function getToolsForMode(modeId: string): ToolDefinition[] {
   const mode = getMode(modeId);
   const names = mode?.toolNames ?? getMode('implementation')!.toolNames;
-  return names
+  const coreTools = names
     .map((name) => toolsByName.get(name))
     .filter(Boolean) as ToolDefinition[];
+  const pluginTools = getPluginDefs();
+  return pluginTools.length > 0 ? [...coreTools, ...pluginTools] : coreTools;
 }
 
 export const IMPLEMENTER_TOOLS = getToolsForMode('implementation');

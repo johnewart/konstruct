@@ -23,7 +23,7 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import {
   ActionIcon,
   Tooltip,
@@ -32,9 +32,11 @@ import {
   Select,
   Menu,
   Button,
+  Modal,
+  Text,
 } from '@mantine/core';
 import { useMantineColorScheme, useComputedColorScheme } from '@mantine/core';
-import { IconSun, IconMoon, IconTerminal, IconSettings } from '@tabler/icons-react';
+import { IconSun, IconMoon, IconTerminal, IconSettings, IconRefresh } from '@tabler/icons-react';
 import { ProjectModelProvider, useProjectModel } from './contexts/ProjectModelContext';
 import { DocumentPage } from './pages/Document';
 import { Chat } from './pages/Chat';
@@ -44,6 +46,8 @@ import { trpc } from '../client/trpc';
 import { DiffViewerPage } from './pages/DiffViewer';
 import { CodeExplorerPage } from './pages/CodeExplorerPage';
 import { PullRequestsPage } from './pages/PullRequestsPage';
+import { usePluginViews } from './plugins/usePluginViews';
+import type { PluginViewEntry } from './plugins/usePluginViews';
 import './index.css';
 
 function ThemeToggle() {
@@ -60,7 +64,7 @@ function ThemeToggle() {
           computed === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
         }
       >
-        {computed === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+        {computed === 'dark' ? <IconSun size={14} stroke={1} /> : <IconMoon size={14} stroke={1} />}
       </ActionIcon>
     </Tooltip>
   );
@@ -230,7 +234,7 @@ function TopNavModelSelector() {
   );
 }
 
-function TopNav() {
+function TopNav({ pluginViews = [] }: { pluginViews?: PluginViewEntry[] }) {
   const location = useLocation();
   const isChat =
     location.pathname === '/' || location.pathname.startsWith('/chat/');
@@ -315,12 +319,35 @@ function TopNav() {
             color: 'var(--app-text)',
             textDecoration: 'none',
             fontSize: 14,
+            paddingRight: 16,
+            marginRight: 16,
+            borderRight: '1px solid var(--app-border)',
             display: 'flex',
             alignItems: 'center',
           }}
         >
           Code explorer
         </Box>
+        {pluginViews.map((p) => (
+          <Box
+            key={p.id}
+            component={Link}
+            to={p.path}
+            style={{
+              fontWeight: location.pathname === p.path ? 600 : 500,
+              color: 'var(--app-text)',
+              textDecoration: 'none',
+              fontSize: 14,
+              paddingRight: 16,
+              marginRight: 16,
+              borderRight: '1px solid var(--app-border)',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            {p.label}
+          </Box>
+        ))}
       </Group>
       <Group gap="md">
         <TopNavProjectSelector />
@@ -334,7 +361,7 @@ function TopNav() {
             color="blue"
             aria-label="Configuration"
           >
-            <IconSettings size={18} />
+            <IconSettings size={14} stroke={1} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label="Shell">
@@ -345,11 +372,127 @@ function TopNav() {
             color="blue"
             aria-label="Shell"
           >
-            <IconTerminal size={18} />
+            <IconTerminal size={14} stroke={1} />
           </ActionIcon>
         </Tooltip>
       </Group>
     </Group>
+  );
+}
+
+function RestartNeededBanner() {
+  const { data } = trpc.plugins.getRestartNeeded.useQuery(undefined, {
+    refetchInterval: 30_000,
+  });
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const restartServer = trpc.plugins.restartServer.useMutation({
+    onMutate: () => setConfirmOpen(false),
+  });
+
+  if (!data?.restartNeeded) return null;
+
+  return (
+    <>
+      <Box
+        px="md"
+        py="xs"
+        style={{
+          background: 'var(--mantine-color-yellow-2)',
+          borderBottom: '1px solid var(--mantine-color-yellow-4)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <Group gap="xs" style={{ flex: 1, minWidth: 0 }}>
+          <IconRefresh size={18} style={{ flexShrink: 0 }} />
+          <Text size="sm" fw={500}>
+            Restart required to apply plugin changes.
+          </Text>
+        </Group>
+        <Button
+          size="xs"
+          variant="light"
+          color="dark"
+          leftSection={<IconRefresh size={14} />}
+          onClick={() => setConfirmOpen(true)}
+          aria-label="Restart server"
+        >
+          Restart now
+        </Button>
+      </Box>
+      <Modal
+        opened={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Restart server?"
+        centered
+      >
+        <Text size="sm" c="dimmed" mb="md">
+          The server will exit so plugin changes can take effect. If you run it with a process
+          manager (e.g. systemd, PM2) or restart the dev command, it will come back and the app
+          will reconnect.
+        </Text>
+        <Group justify="flex-end" gap="xs">
+          <Button variant="default" onClick={() => setConfirmOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            color="yellow"
+            loading={restartServer.isPending}
+            onClick={() => restartServer.mutate()}
+            leftSection={<IconRefresh size={14} />}
+          >
+            Restart
+          </Button>
+        </Group>
+      </Modal>
+    </>
+  );
+}
+
+function AppContent() {
+  const { views: pluginViews } = usePluginViews();
+  return (
+    <>
+      <RestartNeededBanner />
+      <TopNav pluginViews={pluginViews} />
+      <Box
+        component="main"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+        }}
+      >
+        <Routes>
+          <Route path="/" element={<Chat />} />
+          <Route path="/chat" element={<Navigate to="/" replace />} />
+          <Route path="/chat/:sessionId" element={<Chat />} />
+          <Route path="/doc/:id" element={<DocumentPage />} />
+          <Route path="/config" element={<ConfigurationPage />} />
+          <Route path="/runpod" element={<Navigate to="/config?tab=runpod" replace />} />
+          <Route path="/vms" element={<Navigate to="/config?tab=vms" replace />} />
+          <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
+          <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
+          <Route path="/cli" element={<FallbackCli />} />
+          <Route path="/diff" element={<DiffViewerPage />} />
+          <Route path="/pr" element={<PullRequestsPage />} />
+          <Route path="/code-explorer" element={<CodeExplorerPage />} />
+          {pluginViews.map((p) => (
+            <Route
+              key={p.id}
+              path={p.path}
+              element={
+                <Suspense fallback={null}>
+                  <p.Component />
+                </Suspense>
+              }
+            />
+          ))}
+        </Routes>
+      </Box>
+    </>
   );
 }
 
@@ -368,31 +511,7 @@ function App() {
           ['--app-topnav-height' as string]: '52px',
         }}
       >
-        <TopNav />
-        <Box
-          component="main"
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflow: 'auto',
-          }}
-        >
-          <Routes>
-            <Route path="/" element={<Chat />} />
-            <Route path="/chat" element={<Navigate to="/" replace />} />
-            <Route path="/chat/:sessionId" element={<Chat />} />
-            <Route path="/doc/:id" element={<DocumentPage />} />
-            <Route path="/config" element={<ConfigurationPage />} />
-            <Route path="/runpod" element={<Navigate to="/config?tab=runpod" replace />} />
-            <Route path="/vms" element={<Navigate to="/config?tab=vms" replace />} />
-            <Route path="/projects" element={<Navigate to="/config?tab=projects" replace />} />
-            <Route path="/providers" element={<Navigate to="/config?tab=providers" replace />} />
-            <Route path="/cli" element={<FallbackCli />} />
-            <Route path="/diff" element={<DiffViewerPage />} />
-            <Route path="/pr" element={<PullRequestsPage />} />
-            <Route path="/code-explorer" element={<CodeExplorerPage />} />
-          </Routes>
-        </Box>
+        <AppContent />
       </Box>
       </ProjectModelProvider>
     </BrowserRouter>

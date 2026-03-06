@@ -73,8 +73,14 @@ export type ConfigProvider = {
 export type KonstructConfig = {
   /** Current default provider id (set from UI). Model is per-provider. */
   defaultProviderId?: string;
-  /** When true, show RunPod section in settings and allow RunPod management. Default true. */
+  /** When true, show RunPod section in settings and allow RunPod management. Default false. */
   runpodManagementEnabled?: boolean;
+  /** When true, show VMs section in settings and allow VM management. Default false. */
+  vmManagementEnabled?: boolean;
+  /** Plugin ids to load (e.g. ['jira'] → konstruct-plugin-jira). Per-plugin config at top level (e.g. jira: { baseUrl }). */
+  plugins?: { enabled?: string[] };
+  /** Per-workspace plugin settings: projectId -> pluginId -> settings object. */
+  pluginSettings?: Record<string, Record<string, Record<string, unknown>>>;
   /** Provider list: id, name, type, secret_ref, and type-specific options. */
   providers?: ConfigProvider[];
   /** Known projects (global config only): name, git URL, location (local path or VM). */
@@ -227,12 +233,39 @@ function normalize(raw: Record<string, unknown> | null): KonstructConfig {
 
   const runpodManagementEnabled = (() => {
     const v = raw.runpodManagementEnabled ?? (raw.runpod as Record<string, unknown> | undefined)?.managementEnabled;
-    return v === undefined ? true : !!v;
+    return v === true;
+  })();
+
+  const vmManagementEnabled = raw.vmManagementEnabled === true;
+
+  const pluginsEnabled = (() => {
+    const p = raw.plugins as Record<string, unknown> | undefined;
+    const arr = p?.enabled;
+    if (!Array.isArray(arr)) return undefined;
+    return arr.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim());
+  })();
+
+  const pluginSettings = (() => {
+    const ps = raw.pluginSettings;
+    if (!ps || typeof ps !== 'object' || Array.isArray(ps)) return undefined;
+    const out: Record<string, Record<string, Record<string, unknown>>> = {};
+    for (const [projectId, perPlugin] of Object.entries(ps)) {
+      if (!perPlugin || typeof perPlugin !== 'object' || Array.isArray(perPlugin)) continue;
+      const inner: Record<string, Record<string, unknown>> = {};
+      for (const [pluginId, settings] of Object.entries(perPlugin)) {
+        if (settings != null && typeof settings === 'object' && !Array.isArray(settings)) inner[pluginId] = settings as Record<string, unknown>;
+      }
+      if (Object.keys(inner).length > 0) out[projectId] = inner;
+    }
+    return Object.keys(out).length ? out : undefined;
   })();
 
   return {
     defaultProviderId: defaultProviderId || undefined,
     runpodManagementEnabled,
+    vmManagementEnabled,
+    plugins: pluginsEnabled?.length ? { enabled: pluginsEnabled } : undefined,
+    pluginSettings,
     providers: providersList,
     runpod: raw.runpod as KonstructConfig['runpod'],
     github: (() => {

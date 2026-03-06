@@ -15,7 +15,7 @@
  */
 
 import { useState } from 'react';
-import { Stack, Text, Textarea, Button, Card, Group, Alert } from '@mantine/core';
+import { Stack, Text, Textarea, Button, Card, Group, Alert, SimpleGrid } from '@mantine/core';
 import { trpc } from '../../client/trpc';
 
 export function AssistantInstructionsPage() {
@@ -54,7 +54,7 @@ export function AssistantInstructionsPage() {
   }
 
   return (
-    <Stack gap="lg" maw={720}>
+    <Stack gap="lg">
       <Text size="sm" c="dimmed">
         Add extended instructions per assistant. These are appended to the system prompt so you can
         add personal preferences, project-specific rules, or things you want the assistant to always
@@ -66,54 +66,69 @@ export function AssistantInstructionsPage() {
           Loading saved instructions…
         </Text>
       )}
-      {modes.map((mode) => (
-        <Card key={mode.id} withBorder padding="md" radius="md">
-          <Stack gap="xs">
-            <Group justify="space-between" align="flex-start">
-              <div>
-                <Text fw={600} size="sm">
-                  {mode.name}
-                </Text>
-                {mode.description && (
-                  <Text size="xs" c="dimmed" mt={4}>
-                    {mode.description}
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg" verticalSpacing="lg">
+        {modes.map((mode) => (
+          <Card
+            key={mode.id}
+            withBorder
+            padding="md"
+            radius="md"
+            style={{ minHeight: 420 }}
+          >
+            <Stack gap="xs" style={{ height: '100%' }}>
+              <Group justify="space-between" align="flex-start">
+                <div>
+                  <Text fw={600} size="sm">
+                    {mode.name}
+                  </Text>
+                  {mode.description && (
+                    <Text size="xs" c="dimmed" mt={4}>
+                      {mode.description}
+                    </Text>
+                  )}
+                </div>
+              </Group>
+              <Textarea
+                label="Extended instructions"
+                placeholder="e.g. Prefer functional style. Never suggest eval(). Always mention security implications."
+                minRows={14}
+                value={currentValue(mode.id)}
+                onChange={(e) => handleChange(mode.id, e.currentTarget.value)}
+                description="Appended to this assistant's system prompt."
+                styles={{
+                  input: {
+                    fontFamily: 'var(--mono-font)',
+                    fontSize: '0.85em',
+                    minHeight: 280,
+                  },
+                }}
+              />
+              <Group>
+                <Button
+                  size="xs"
+                  variant="light"
+                  onClick={() => handleSave(mode.id)}
+                  loading={setInstructions.isPending}
+                  disabled={dirty[mode.id] === undefined}
+                >
+                  Save
+                </Button>
+                {dirty[mode.id] !== undefined && (
+                  <Text size="xs" c="dimmed">
+                    Unsaved changes
                   </Text>
                 )}
-              </div>
-            </Group>
-            <Textarea
-              label="Extended instructions"
-              placeholder="e.g. Prefer functional style. Never suggest eval(). Always mention security implications."
-              minRows={3}
-              value={currentValue(mode.id)}
-              onChange={(e) => handleChange(mode.id, e.currentTarget.value)}
-              description="Appended to this assistant's system prompt."
-            />
-            <Group>
-              <Button
-                size="xs"
-                variant="light"
-                onClick={() => handleSave(mode.id)}
-                loading={setInstructions.isPending}
-                disabled={dirty[mode.id] === undefined}
-              >
-                Save
-              </Button>
-              {dirty[mode.id] !== undefined && (
-                <Text size="xs" c="dimmed">
-                  Unsaved changes
-                </Text>
+              </Group>
+              {setInstructions.isError && setInstructions.variables?.modeId === mode.id && (
+                <Alert color="red">{setInstructions.error.message}</Alert>
               )}
-            </Group>
-            {setInstructions.isError && setInstructions.variables?.modeId === mode.id && (
-              <Alert color="red">{setInstructions.error.message}</Alert>
-            )}
-            {setInstructions.isSuccess && setInstructions.variables?.modeId === mode.id && (
-              <Alert color="green">Saved.</Alert>
-            )}
-          </Stack>
-        </Card>
-      ))}
+              {setInstructions.isSuccess && setInstructions.variables?.modeId === mode.id && (
+                <Alert color="green">Saved.</Alert>
+              )}
+            </Stack>
+          </Card>
+        ))}
+      </SimpleGrid>
     </Stack>
   );
 }

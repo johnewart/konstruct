@@ -58,10 +58,10 @@ const providerInputSchema = z.object({
 });
 
 export const providerConfigRouter = router({
-  /** Whether RunPod management section is enabled in settings. Default true. */
+  /** Whether RunPod management section is enabled in settings. Default false. */
   getRunpodManagementEnabled: publicProcedure.query(() => {
     const config = loadGlobalConfig();
-    return { enabled: config.runpodManagementEnabled !== false };
+    return { enabled: config.runpodManagementEnabled === true };
   }),
 
   setRunpodManagementEnabled: publicProcedure
@@ -69,6 +69,21 @@ export const providerConfigRouter = router({
     .mutation(({ input }) => {
       const config = loadGlobalConfig();
       config.runpodManagementEnabled = input.enabled;
+      saveGlobalConfig(config);
+      return { enabled: input.enabled };
+    }),
+
+  /** Whether VMs section is enabled in settings. Default false. */
+  getVmManagementEnabled: publicProcedure.query(() => {
+    const config = loadGlobalConfig();
+    return { enabled: config.vmManagementEnabled === true };
+  }),
+
+  setVmManagementEnabled: publicProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(({ input }) => {
+      const config = loadGlobalConfig();
+      config.vmManagementEnabled = input.enabled;
       saveGlobalConfig(config);
       return { enabled: input.enabled };
     }),

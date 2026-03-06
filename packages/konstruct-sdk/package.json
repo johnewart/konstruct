@@ -1,0 +1,21 @@
+{
+  "name": "konstruct-sdk",
+  "version": "0.1.0",
+  "description": "Types and contract for Konstruct plugins",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "files": ["dist", "README.md"],
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
