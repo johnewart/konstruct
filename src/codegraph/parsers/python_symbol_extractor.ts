@@ -206,22 +206,17 @@ export class PythonSymbolExtractor {
     this.classCounter = 0;
     this.assignCounter = 0;
 
-    // Check for imports → emit module node if present
-    const hasImports = rootNode.namedChildren.some(
-      (c) => c.type === 'import_from_statement' || c.type === 'import_statement'
-    );
-    if (hasImports) {
-      const moduleId = `file://${this.pathForIds}::${this.moduleName}`;
-      this.defs.push({
-        id: moduleId,
-        name: this.moduleName,
-        kind: SymbolKind.MODULE,
-        scope: this.moduleName,
-        location: makeLocation(rootNode, this.filename),
-        ast_node_id: `ast_module_${this.moduleName}`,
-        metadata: new Map<string, any>(),
-      });
-    }
+    // Emit a MODULE node for every file so import edges to this module (e.g. from package import this_submodule) have a target
+    const moduleId = `file://${this.pathForIds}::${this.moduleName}`;
+    this.defs.push({
+      id: moduleId,
+      name: this.moduleName,
+      kind: SymbolKind.MODULE,
+      scope: this.moduleName,
+      location: makeLocation(rootNode, this.filename),
+      ast_node_id: `ast_module_${this.moduleName}`,
+      metadata: new Map<string, any>(),
+    });
 
     this.walkDefs(rootNode);
     return this.defs;
@@ -461,18 +456,47 @@ export class PythonSymbolExtractor {
         const moduleNode = child.namedChildren[0];
         if (!moduleNode) continue;
         const sourceModule = moduleNode.text;
-        // Resolve module to actual file path (e.g. a.foo -> path ending with a/foo.py)
+        // Resolve module to actual file: single module (a/foo.py) or package (a/foo/__init__.py)
         const modulePathSuffix = sourceModule.replace(/\./g, path.sep) + '.py';
+        const packageInitSuffix = sourceModule.replace(/\./g, path.sep) + path.sep + '__init__.py';
         const resolvedFile = this.allDefFiles.find((f) => {
           const norm = path.normalize(f);
-          return norm.endsWith(path.normalize(modulePathSuffix)) || norm.replace(/\\/g, '/').endsWith(sourceModule.replace(/\./g, '/') + '.py');
+          const normSlash = norm.replace(/\\/g, '/');
+          const suffixPy = sourceModule.replace(/\./g, '/') + '.py';
+          const suffixInit = sourceModule.replace(/\./g, '/') + '/__init__.py';
+          return (
+            norm.endsWith(path.normalize(modulePathSuffix)) ||
+            norm.endsWith(path.normalize(packageInitSuffix)) ||
+            normSlash.endsWith(suffixPy) ||
+            normSlash.endsWith(suffixInit)
+          );
         });
         const pathForIdsOfModule = resolvedFile
           ? getPathForIds(resolvedFile, this.allFilePaths.length > 0 ? this.allFilePaths : undefined)
           : sourceModule.replace(/\./g, '/') + '.py'; // fallback for unresolved
+        const packageDir = resolvedFile ? path.dirname(resolvedFile) : '';
+
         for (let i = 1; i < child.namedChildren.length; i++) {
           const name = child.namedChildren[i].text;
-          this.importTable.set(name, `file://${pathForIdsOfModule}::${name}`);
+          // Resolve each imported name as a submodule when source is a package (e.g. from endpoints import config_endpoints -> config_endpoints.py)
+          let targetPath = `file://${pathForIdsOfModule}::${name}`;
+          if (packageDir) {
+            const submodulePy = path.join(packageDir, name + '.py');
+            const submoduleInit = path.join(packageDir, name, '__init__.py');
+            const submoduleFile = this.allDefFiles.find((f) => {
+              const n = path.normalize(f);
+              return n === path.normalize(submodulePy) || n === path.normalize(submoduleInit);
+            });
+            if (submoduleFile) {
+              const pathForIdsOfSub = getPathForIds(
+                submoduleFile,
+                this.allFilePaths.length > 0 ? this.allFilePaths : undefined
+              );
+              const subModuleName = path.basename(submoduleFile).replace(/\.py$/, '');
+              targetPath = `file://${pathForIdsOfSub}::${subModuleName}`;
+            }
+          }
+          this.importTable.set(name, targetPath);
         }
       }
     }

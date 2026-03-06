@@ -347,6 +347,7 @@ const dependencyGraph: DependencyGraph = {
 // ─── Expected symbol paths ────────────────────────────────────────────────────
 // Central reference so tests and helpers share one source of truth.
 const PATHS = {
+  MODULE:         "file://example.py::example",
   MAX_RETRIES:    "file://example.py::MAX_RETRIES",
   DataProcessor:  "file://example.py::DataProcessor",
   INIT:           "file://example.py::DataProcessor.__init__",
@@ -409,7 +410,7 @@ describe("DependencyGraphBuilder — example.py", () => {
       expect(graph.metadata).toBeInstanceOf(Map);
     });
 
-    it("contains exactly the 8 expected nodes", () => {
+    it("contains exactly the 9 expected nodes (module + symbols)", () => {
       const expectedPaths = Object.values(PATHS);
       expect(graph.nodes.size).toBe(expectedPaths.length);
       for (const path of expectedPaths) {
