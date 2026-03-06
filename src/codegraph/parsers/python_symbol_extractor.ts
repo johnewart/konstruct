@@ -4,6 +4,7 @@ import type { SymbolDef, SymbolRef, SourceLocation } from '../spec/graph.spec.ts
 import { SymbolKind, ReferenceContext } from '../spec/graph.spec.ts';
 import type { SyntaxNode } from './python.ts';
 import { SymbolResolver } from '../graph/resolver.ts';
+import { getPathForIds, computeCommonRoot } from '../pathUtils.ts';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -99,35 +100,6 @@ function isMainGuard(node: SyntaxNode): boolean {
   const cond = node.namedChildren[0];
   if (!cond) return false;
   return cond.text.includes('__name__');
-}
-
-/**
- * Path segment for symbol ids: relative path from common root when multiple files,
- * else basename. Ensures same basename in different dirs (e.g. a/foo.py vs b/foo.py) stay distinct.
- */
-function getPathForIds(filename: string, allFilePaths?: string[]): string {
-  if (!allFilePaths || allFilePaths.length <= 1) {
-    return path.basename(filename);
-  }
-  const root = computeCommonRoot(allFilePaths);
-  const resolved = path.resolve(filename);
-  const rel = path.relative(root, resolved);
-  const normalized = rel.replace(/\\/g, '/') || path.basename(filename);
-  return normalized;
-}
-
-function computeCommonRoot(filePaths: string[]): string {
-  if (filePaths.length === 0) return '';
-  const normalized = filePaths.map((p) => path.resolve(p).replace(/\\/g, '/'));
-  let prefix = normalized[0];
-  for (let i = 1; i < normalized.length; i++) {
-    const p = normalized[i];
-    while (prefix.length > 0 && !(p === prefix || p.startsWith(prefix + '/'))) {
-      prefix = path.dirname(prefix).replace(/\\/g, '/');
-    }
-  }
-  // prefix is the longest common path prefix; if it doesn't end with / it's the common directory
-  return prefix || '/';
 }
 
 const BUILTINS = new Set([
