@@ -15,10 +15,9 @@
  */
 
 /**
- * Ensures .cursor/mcp.json in the project root contains a Konstruct MCP server entry
- * so Cursor can connect to Konstruct's MCP endpoint. Uses "${env:VAR}" placeholders;
- * Cursor does not resolve these—the Konstruct backend resolves them server-side from
- * its process env. Set KONSTRUCT_SESSION_ID / KONSTRUCT_AGENT_NAME where the server runs (e.g. same shell as npm run dev).
+ * Ensures .cursor/mcp.json in the project root contains a single Konstruct MCP server entry
+ * so Cursor can connect to Konstruct's MCP endpoint. Mode (e.g. ask vs implementation) is determined by
+ * session mapping (params.sessionId + params.mode or params.agentName), not by URL or headers.
  *
  * Node-only: uses require/createRequire for fs/path at runtime so shared bundle stays safe
  * in non-Node (e.g. browser). Works in both Node CJS and Node ESM.
@@ -29,11 +28,11 @@ import { createLogger } from './logger';
 const log = createLogger('cursor-mcp');
 const SERVER_NAME = 'konstruct';
 
-function getMcpUrl(mode?: string): string {
+function getMcpUrl(): string {
+  // Use localhost. (trailing dot) so clients don't bypass proxy for "localhost"
   const base =
-    (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost:3001';
-  const path = base.replace(/\/$/, '') + '/mcp';
-  return mode ? `${path}?mode=${encodeURIComponent(mode)}` : path;
+    (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost.:3001';
+  return base.replace(/\/$/, '') + '/mcp';
 }
 
 export async function ensureCursorMcpConfig(projectRoot: string): Promise<void> {
@@ -79,18 +78,14 @@ export async function ensureCursorMcpConfig(projectRoot: string): Promise<void> 
     }
     const mcpServers = (existing.mcpServers && typeof existing.mcpServers === 'object'
       ? { ...existing.mcpServers }
-      : {}) as Record<string, { url?: string; headers?: Record<string, string> }>;
+      : {}) as Record<string, { url?: string }>;
 
-    const baseHeaders = {
-      'X-Konstruct-Session-Id': '${env:KONSTRUCT_SESSION_ID}',
-      API_KEY: '${env:KONSTRUCT_API_KEY}',
-    };
-    // Default: all tools (no mode param)
-    mcpServers[SERVER_NAME] = { url: getMcpUrl(), headers: { 'X-Agent-Name': '${env:KONSTRUCT_AGENT_NAME}', ...baseHeaders } };
-    // Minimal: read-only tools via ?mode=minimal (no env needed; Cursor does not resolve ${env:...})
-    mcpServers['konstruct-minimal'] = { url: getMcpUrl('minimal'), headers: baseHeaders };
-    // Full: all tools via ?mode=full (explicit; no env needed)
-    mcpServers['konstruct-full'] = { url: getMcpUrl('full'), headers: baseHeaders };
+    // Remove legacy multi-entry Konstruct keys so only one remains
+    delete mcpServers['konstruct-minimal'];
+    delete mcpServers['konstruct-full'];
+
+    // Single entry; mode id (ask, implementation, etc.) is determined by session mapping (params.sessionId + params.mode/agentName)
+    mcpServers[SERVER_NAME] = { url: getMcpUrl() };
 
     const out = JSON.stringify({ mcpServers }, null, 2);
     fs.writeFileSync(mcpPath, out + '\n', 'utf-8');

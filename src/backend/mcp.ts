@@ -26,17 +26,18 @@
  *
  * Query params on GET /mcp:
  *   projectRoot  - absolute path for tool path resolution (default: cwd)
- *   mode         - Konstruct mode whose toolset to expose (default: implementation = all tools). Use mode=minimal for read-only tools, mode=full for all tools; when X-Agent-Name is not resolved (e.g. Cursor sends literal "${env:...}"), the server applies the preset from mode so tool restriction works without env vars.
+ *   mode         - Konstruct mode whose toolset to expose (default: implementation). Use mode=ask for read-only, mode=implementation for edit/run tools; any mode id from modes.ts is valid.
  *   allowedTools - optional comma-separated list of tool names; when set, only these tools from the mode are exposed (e.g. for limiting Claude to a subset)
  *
  * Headers on GET /mcp (e.g. from Cursor .cursor/mcp.json):
  *   X-Allowed-Tools         - comma-separated tool names; when set, only these tools are exposed (overrides X-Agent-Name if both present).
- *   X-Agent-Name            - agent preset name; when set, only tools for that preset are exposed. Presets: "minimal" (read-only), "full" (all tools). Cursor often sends the literal "${env:VAR}"; we resolve server-side from the Konstruct backend process env.
+ *   X-Agent-Name            - mode id (e.g. ask, implementation); when set, tools for that mode are exposed. Cursor often sends the literal "${env:VAR}"; we resolve server-side from the Konstruct backend process env.
  *   X-Konstruct-Session-Id  - Konstruct chat session id; when set, session-scoped tools (list_todos, add_todo, etc.) use this session. Use "${env:KONSTRUCT_SESSION_ID}" in mcp.json; we resolve it server-side (Cursor does not resolve env vars in headers). Set KONSTRUCT_SESSION_ID in the environment where the Konstruct server runs (e.g. same shell as `npm run dev`).
  *
  * Session -> mode map: many clients (e.g. Cursor) send sessionId (and optionally mode/agentName) in JSON-RPC params. We keep a map sessionId -> { modeId, allowedTools } and restrict tools/list and tools/call by it, so tool restriction can be driven per session without relying on headers.
  */
 
+import { getMode } from '../agent/modes.ts';
 import { getToolsForMode } from '../agent/toolDefinitions.ts';
 import type { ToolDefinition } from '../shared/llm.ts';
 import { isBackendTool } from '../shared/toolClassification.ts';
@@ -79,12 +80,6 @@ function interpolateEnvHeader(value: string | undefined): string | undefined {
   return value;
 }
 
-/** Preset tool lists by agent name; used when X-Agent-Name header is set. */
-const AGENT_NAME_TOOLS: Record<string, string[]> = {
-  minimal: ['list_files', 'read_file_region', 'grep', 'glob', 'codebase_outline', 'search_code'],
-  full: [], // empty = no filter = all tools
-};
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -119,6 +114,21 @@ function getEffectiveSessionConfig(session: McpSession): { modeId: string; allow
   return { modeId: session.modeId, allowedTools: session.allowedTools };
 }
 
+/** Build the tool list for this session (same filtering as tools/list). Used by initialize and tools/list. */
+function getToolsForSession(session: McpSession): ReturnType<typeof toMcpTool>[] {
+  const { modeId: effectiveModeId, allowedTools: effectiveAllowedTools } = getEffectiveSessionConfig(session);
+  let list = getToolsForMode(effectiveModeId);
+  if (effectiveAllowedTools?.size) {
+    list = list.filter((t) => effectiveAllowedTools.has(t.function.name));
+  }
+  const projectId = getProjectIdForRoot(session.projectRoot);
+  if (projectId) {
+    const disabled = new Set(getDisabledToolsForProject(projectId));
+    if (disabled.size) list = list.filter((t) => !disabled.has(t.function.name));
+  }
+  return list.map(toMcpTool);
+}
+
 // ---------------------------------------------------------------------------
 // JSON-RPC dispatcher
 // ---------------------------------------------------------------------------
@@ -130,21 +140,21 @@ async function dispatchRequest(
   const id = (body.id as string | number | null) ?? null;
   const params = body.params as { sessionId?: string; mode?: string; agentName?: string; [k: string]: unknown } | undefined;
 
-  // Cursor (and other clients) often send sessionId in params; use it for session -> mode mapping.
+  // Cursor (and other clients) often send sessionId in params; use it for session -> mode mapping (sticky per chat session).
   if (params?.sessionId != null && typeof params.sessionId === 'string') {
     session.clientSessionId = params.sessionId;
     const modeOrAgent = (params.mode ?? params.agentName) as string | undefined;
     if (modeOrAgent?.trim()) {
-      const modeId = modeOrAgent.trim().toLowerCase();
-      const preset = AGENT_NAME_TOOLS[modeId];
-      const allowedTools = preset !== undefined
-        ? (preset.length ? new Set(preset) : undefined)
-        : undefined;
-      sessionModeMap.set(params.sessionId, {
-        modeId: preset !== undefined ? session.modeId : modeOrAgent.trim(),
-        allowedTools,
-      });
-      log.debug('mcp session mode map', params.sessionId, '->', modeOrAgent, allowedTools ? `(${allowedTools.size} tools)` : 'all');
+      const raw = modeOrAgent.trim();
+      const modeKey = raw.toLowerCase();
+      const knownMode = getMode(modeKey);
+      const storedModeId = knownMode ? knownMode.id : raw;
+      sessionModeMap.set(params.sessionId, { modeId: storedModeId });
+      const toolCount = getToolsForMode(storedModeId).length;
+      log.info('mcp session -> mode (sticky)', params.sessionId, '->', storedModeId, `(${toolCount} tools)`);
+    } else if (!sessionModeMap.has(params.sessionId)) {
+      // First time we see this chat session; record connection default so mapping is visible and sticky.
+      sessionModeMap.set(params.sessionId, { modeId: session.modeId, allowedTools: session.allowedTools });
     }
   }
 
@@ -155,32 +165,27 @@ async function dispatchRequest(
     sendSseEvent(session, 'message', JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
 
   switch (body.method) {
-    case 'initialize':
+    case 'initialize': {
+      const tools = getToolsForSession(session);
+      log.info('mcp initialize', 'tools:', tools.length);
       respond({
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
         serverInfo: { name: 'konstruct', version: '1.0.0' },
+        // Include tools so clients that don't call tools/list still get the list (e.g. some Cursor MCP flows)
+        tools,
       });
       break;
+    }
 
     case 'notifications/initialized':
       // Notification — no response needed
       break;
 
     case 'tools/list': {
-      const { modeId: effectiveModeId, allowedTools: effectiveAllowedTools } = getEffectiveSessionConfig(session);
-      let list = getToolsForMode(effectiveModeId);
-      if (effectiveAllowedTools?.size) {
-        list = list.filter((t) => effectiveAllowedTools.has(t.function.name));
-      }
-      const projectIdForList = getProjectIdForRoot(session.projectRoot);
-      if (projectIdForList) {
-        const disabledForList = new Set(getDisabledToolsForProject(projectIdForList));
-        if (disabledForList.size) {
-          list = list.filter((t) => !disabledForList.has(t.function.name));
-        }
-      }
-      respond({ tools: list.map(toMcpTool) });
+      const tools = getToolsForSession(session);
+      log.info('mcp tools/list', 'count:', tools.length);
+      respond({ tools });
       break;
     }
 
@@ -245,22 +250,27 @@ function getBaseUrl(req: http.IncomingMessage): string {
   return `${proto}://${host}`;
 }
 
+/** Base URL for MCP endpoint when request was proxied (localhost. so client uses proxy); only used when opts.proxied is true. */
+const PROXY_BASE_URL = (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL)
+  ? process.env.KONSTRUCT_MCP_BASE_URL.replace(/\/$/, '')
+  : 'http://localhost.:3001';
+
 /**
  * GET /mcp — open an SSE session.
  * Claude connects here; we send back the messages endpoint as a full URL so the client can POST.
+ * @param opts.proxied - If true, base URL uses localhost. so the client is forced through the proxy; if false, uses request Host (plain localhost for direct).
  */
 export function handleMcpSse(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  url: URL
+  url: URL,
+  opts?: { proxied?: boolean }
 ): void {
   const mcpSessionId = crypto.randomUUID();
   const projectRoot = url.searchParams.get('projectRoot') ?? process.cwd();
   const modeId = url.searchParams.get('mode') ?? 'implementation';
   const xSessionHeader = Array.isArray(req.headers['x-konstruct-session-id']) ? req.headers['x-konstruct-session-id'][0] : req.headers['x-konstruct-session-id'];
   const konstructSessionId = url.searchParams.get('konstructSessionId') ?? interpolateEnvHeader(xSessionHeader) ?? undefined;
-  const resolvedAgent = interpolateEnvHeader(Array.isArray(req.headers['x-agent-name']) ? req.headers['x-agent-name'][0] : req.headers['x-agent-name']);
-  log.debug('mcp SSE: query', Object.fromEntries(url.searchParams.entries()), 'x-agent-name (resolved)', resolvedAgent ?? '(not set — set KONSTRUCT_AGENT_NAME where the Konstruct server runs, e.g. npm run dev)', 'konstructSessionId', konstructSessionId ?? '(none — set X-Konstruct-Session-Id or KONSTRUCT_SESSION_ID for session-scoped tools)');
   let allowedTools: Set<string> | undefined;
   const allowedToolsParam = url.searchParams.get('allowedTools');
   if (allowedToolsParam?.length) {
@@ -271,25 +281,18 @@ export function handleMcpSse(
     const allowedHeader = interpolateEnvHeader(allowedRaw);
     if (allowedHeader?.length) {
       allowedTools = new Set(allowedHeader.split(',').map((s) => s.trim()).filter(Boolean));
-    } else {
-      const xAgent = req.headers['x-agent-name'];
-      const agentRaw = Array.isArray(xAgent) ? xAgent[0] : xAgent;
-      const agentHeader = interpolateEnvHeader(agentRaw);
-      if (agentHeader?.length) {
-        const preset = AGENT_NAME_TOOLS[agentHeader.trim().toLowerCase()];
-        if (preset !== undefined) allowedTools = preset.length ? new Set(preset) : undefined;
-      }
-    }
-    // When client does not resolve env vars (e.g. Cursor), restrict by mode from URL so user can pick mode without env
-    if (allowedTools === undefined) {
-      const modePreset = AGENT_NAME_TOOLS[modeId.toLowerCase()];
-      if (modePreset !== undefined) {
-        allowedTools = modePreset.length ? new Set(modePreset) : undefined;
-        log.debug('mcp tool preset from mode param', modeId, allowedTools ? `${allowedTools.size} tools` : 'all');
-      }
     }
   }
-  const baseUrl = getBaseUrl(req);
+  // X-Agent-Name can override mode (e.g. ask vs implementation); use it if it's a known mode id.
+  let effectiveModeId = getMode(modeId) ? modeId : 'implementation';
+  const xAgent = req.headers['x-agent-name'];
+  const agentRaw = Array.isArray(xAgent) ? xAgent[0] : xAgent;
+  const agentHeader = interpolateEnvHeader(agentRaw);
+  if (agentHeader?.trim()) {
+    const agentModeKey = agentHeader.trim().toLowerCase();
+    if (getMode(agentModeKey)) effectiveModeId = agentModeKey;
+  }
+  const baseUrl = opts?.proxied ? PROXY_BASE_URL : getBaseUrl(req).replace(/^(https?:\/\/)localhost\./, '$1localhost');
   const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${mcpSessionId}`;
 
   res.writeHead(200, {
@@ -299,7 +302,7 @@ export function handleMcpSse(
     'Access-Control-Allow-Origin': '*',
   });
 
-  const session: McpSession = { res, projectRoot, modeId, konstructSessionId, allowedTools };
+  const session: McpSession = { res, projectRoot, modeId: effectiveModeId, konstructSessionId, allowedTools };
   sessions.set(mcpSessionId, session);
 
   // Send full URL so Claude (or any MCP client) can POST without knowing the server origin
@@ -317,10 +320,14 @@ export function handleMcpSse(
     log.debug('mcp session closed', mcpSessionId);
   });
 
-  log.info('mcp session opened', mcpSessionId, 'project:', projectRoot, 'mode:', modeId);
+  log.info('mcp session opened', mcpSessionId, 'project:', projectRoot, 'mode:', effectiveModeId);
   const knownSessionIds = Array.from(sessions.keys());
   const knownSessionModes = Array.from(sessionModeMap.entries()).map(([id, cfg]) => ({ sessionId: id, modeId: cfg.modeId, allowedTools: cfg.allowedTools ? Array.from(cfg.allowedTools) : undefined }));
   log.debug('mcp known sessions', { sessionIds: knownSessionIds, sessionModes: knownSessionModes });
+  if (sessionModeMap.size > 0) {
+    const mappingLines = Array.from(sessionModeMap.entries()).map(([sid, cfg]) => `  ${sid} -> ${cfg.modeId}${cfg.allowedTools ? ` (${cfg.allowedTools.size} tools)` : ''}`);
+    log.info('mcp chat session -> mode mappings:\n' + mappingLines.join('\n'));
+  }
 }
 
 /**
@@ -357,7 +364,7 @@ export async function handleMcpMessage(
     res.end(JSON.stringify({ error: 'Invalid JSON' }));
     return;
   }
-  log.debug('mcp messages: method', body.method);
+  log.info('mcp messages: method', body.method);
 
   // Acknowledge immediately; response travels via SSE
   res.writeHead(202);

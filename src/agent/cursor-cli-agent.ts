@@ -27,6 +27,16 @@ const log = createLogger('cursor-agent');
 const DEFAULT_CURSOR_AGENT_PATH =
   process.env.CURSOR_AGENT_PATH ?? 'agent';
 
+/** Cursor API hosts that must not go through HTTP_PROXY (so Cursor's own API calls work). Merge into NO_PROXY when spawning the agent. */
+const CURSOR_NO_PROXY_HOSTS = 'api.cursor.sh,api1.cursor.sh,api2.cursor.sh';
+
+function mergeNoProxy(env: NodeJS.ProcessEnv): void {
+  const existing = [env.NO_PROXY, env.no_proxy].filter(Boolean).join(',').split(',').map((s) => s.trim()).filter(Boolean);
+  const combined = [...new Set([...existing, ...CURSOR_NO_PROXY_HOSTS.split(',')])].join(',');
+  env.NO_PROXY = combined;
+  env.no_proxy = combined;
+}
+
 export interface CursorAgentOptions {
   /** Path to the agent CLI binary. Default: CURSOR_AGENT_PATH env or "agent". */
   cursorPath?: string;
@@ -81,6 +91,7 @@ export function invokeCursorAgent(
 ): Promise<CursorAgentResult> {
   const agentPath = options.cursorPath ?? DEFAULT_CURSOR_AGENT_PATH;
   const env = { ...process.env, ...options.env };
+  mergeNoProxy(env);
   const spawnOpts: SpawnOptions = {
     cwd: options.cwd ?? process.cwd(),
     env,
@@ -168,6 +179,7 @@ export async function listCursorModels(
 ): Promise<CursorModel[]> {
   const agentPath = options.cursorPath ?? DEFAULT_CURSOR_AGENT_PATH;
   const env = { ...process.env, ...options.env };
+  mergeNoProxy(env);
   const spawnOpts: SpawnOptions = {
     cwd: options.cwd ?? process.cwd(),
     env,

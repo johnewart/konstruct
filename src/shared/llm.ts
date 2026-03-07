@@ -207,6 +207,14 @@ const CHAT_HANDLERS: Record<string, ChatHandler> = {
     if (env) {
       if (apiKey?.trim()) env.CURSOR_API_KEY = apiKey;
       else delete env.CURSOR_API_KEY;
+      // Route MCP through Konstruct proxy so session id is sent via Proxy-Authorization (cursor-cli-agent merges NO_PROXY for Cursor API hosts)
+      if (options.sessionId?.trim()) {
+        const mcpBase = process.env.KONSTRUCT_MCP_BASE_URL ?? 'http://localhost.:3001';
+        const parsed = new URL(mcpBase.replace(/\/$/, ''));
+        const proxyUrl = `http://${encodeURIComponent(options.sessionId.trim())}@${parsed.host}`;
+        env.HTTP_PROXY = proxyUrl;
+        env.http_proxy = proxyUrl;
+      }
     }
     const timeoutMs =
       options.timeoutMs ??

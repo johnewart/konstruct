@@ -78,12 +78,137 @@ function writeResponse(res: http.ServerResponse, response: Response): void {
   }
 }
 
+const HOP_BY_HOP = new Set(['proxy-authorization', 'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
+
+/** If present and Basic, return the username (e.g. Konstruct session id). Decodes URI component so session ids with : or @ work. */
+function proxyAuthSessionId(req: http.IncomingMessage): string | undefined {
+  const raw = req.headers['proxy-authorization'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value || !value.startsWith('Basic ')) return undefined;
+  try {
+    const decoded = Buffer.from(value.slice(6), 'base64').toString('utf-8');
+    const colon = decoded.indexOf(':');
+    const username = (colon >= 0 ? decoded.slice(0, colon) : decoded).trim();
+    if (!username) return undefined;
+    try {
+      return decodeURIComponent(username);
+    } catch {
+      return username;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** On direct /mcp requests, inject konstruct session id from Proxy-Authorization if present (same as proxy path). */
+function injectMcpSessionFromProxyAuth(req: http.IncomingMessage, url: URL): void {
+  const sessionId = proxyAuthSessionId(req);
+  if (!sessionId) return;
+  (req.headers as Record<string, string>)['x-konstruct-session-id'] = sessionId;
+  url.searchParams.set('konstructSessionId', sessionId);
+  log.info('mcp direct session from Proxy-Authorization', sessionId);
+}
+
+/** Forward proxy: when target is this server and path is /mcp or /mcp/messages, rewrite and dispatch; else fetch target and stream response. */
+async function handleProxyRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  targetUrl: URL
+): Promise<void> {
+  const sessionId = proxyAuthSessionId(req);
+  const pathname = targetUrl.pathname;
+  const isSelf = (targetUrl.hostname === 'localhost' || targetUrl.hostname === 'localhost.' || targetUrl.hostname === '127.0.0.1') &&
+    (targetUrl.port === String(PORT) || (targetUrl.port === '' && PORT === 80));
+  const isMcpPath = pathname === '/mcp' || pathname === '/mcp/messages';
+  if (isMcpPath) {
+    if (sessionId) log.info('proxy Proxy-Authorization session id', sessionId);
+    else log.info('proxy no Proxy-Authorization (no session id in proxy username)');
+  }
+  if (isSelf && isMcpPath) {
+    const base = `http://localhost:${PORT}`;
+    const internalUrl = new URL(pathname + targetUrl.search, base);
+    if (sessionId) {
+      (req.headers as Record<string, string>)['x-konstruct-session-id'] = sessionId;
+      internalUrl.searchParams.set('konstructSessionId', sessionId);
+    }
+    log.info('proxy rewrite to MCP', internalUrl.toString());
+    if (pathname === '/mcp' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.method === 'POST') req.resume();
+      handleMcpSse(req, res, internalUrl, { proxied: true });
+      return;
+    }
+    if (pathname === '/mcp/messages' && req.method === 'POST') {
+      await handleMcpMessage(req, res, internalUrl);
+      return;
+    }
+  }
+  // If client asked for localhost (no port or :80), forward to this server so we return 404 instead of ECONNREFUSED (e.g. Cursor's getRepositoryInfo to localhost).
+  const isLocalhost = targetUrl.hostname === 'localhost' || targetUrl.hostname === 'localhost.' || targetUrl.hostname === '127.0.0.1';
+  const defaultPort = targetUrl.port === '' || targetUrl.port === '80';
+  const rewrittenToSelf = isLocalhost && defaultPort;
+  if (rewrittenToSelf) {
+    targetUrl.host = `localhost:${PORT}`;
+    targetUrl.port = String(PORT);
+    if (pathname !== '/getRepositoryInfo') log.debug('proxy rewrite localhost to self', targetUrl.pathname);
+  }
+  if (rewrittenToSelf && pathname !== '/getRepositoryInfo') log.debug('proxy forward to upstream', req.method, targetUrl.toString());
+  else if (!rewrittenToSelf) log.info('proxy forward to upstream', req.method, targetUrl.toString());
+  const forwardHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v == null || HOP_BY_HOP.has(k.toLowerCase())) continue;
+    forwardHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
+  }
+  forwardHeaders['host'] = targetUrl.host;
+  const method = req.method ?? 'GET';
+  const body = (method !== 'GET' && method !== 'HEAD' && req.readable)
+    ? (Readable.toWeb(req) as ReadableStream<Uint8Array>)
+    : undefined;
+  try {
+    const response = await fetch(targetUrl.toString(), {
+      method,
+      headers: forwardHeaders,
+      body,
+      duplex: 'half',
+    });
+    writeResponse(res, response);
+  } catch (err) {
+    log.error('proxy fetch error', targetUrl.toString(), err);
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+      res.end('Bad Gateway');
+    }
+  }
+}
+
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   url: URL
 ): Promise<void> {
+  // Forward proxy: client sets HTTP_PROXY (e.g. http://{session-id}@localhost:3001); request line is absolute URI
+  const rawUrl = req.url ?? '';
+  const looksLikeProxy = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
+  if (looksLikeProxy) {
+    try {
+      const targetUrl = new URL(rawUrl);
+      const isLocalhostDefault = (targetUrl.hostname === 'localhost' || targetUrl.hostname === 'localhost.' || targetUrl.hostname === '127.0.0.1') && (targetUrl.port === '' || targetUrl.port === '80');
+      const isMcp = targetUrl.pathname === '/mcp' || targetUrl.pathname === '/mcp/messages';
+      const isGetRepositoryInfo = targetUrl.pathname === '/getRepositoryInfo';
+      if (isLocalhostDefault && !isMcp && !isGetRepositoryInfo) log.debug('proxy request', req.method, targetUrl.host + targetUrl.pathname + targetUrl.search);
+      else if (!isGetRepositoryInfo) log.info('proxy request', req.method, targetUrl.host + targetUrl.pathname + targetUrl.search);
+      await handleProxyRequest(req, res, targetUrl);
+      return;
+    } catch {
+      // invalid URL; fall through to normal handling
+    }
+  }
+
   const pathname = url.pathname;
+
+  // Diagnostic: when MCP is hit with origin form (no proxy), log raw req.url so we can see why proxy path wasn't used
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+    log.info('mcp direct request', req.method, pathname, 'req.url=', rawUrl || '(empty)', looksLikeProxy ? '' : '(origin form; client not using HTTP_PROXY for this request)');
+  }
 
   if (!pathname.startsWith('/trpc')) log.debug(req.method, pathname);
 
@@ -105,7 +230,9 @@ async function handleRequest(
     if (req.method === 'POST') {
       req.resume(); // drain body so the request stream is clean
     }
-    handleMcpSse(req, res, url);
+    injectMcpSessionFromProxyAuth(req, url);
+    log.info('mcp request URL (direct)', url.toString());
+    handleMcpSse(req, res, url, { proxied: false });
     return;
   }
   if (pathname === '/mcp') {
@@ -117,6 +244,7 @@ async function handleRequest(
 
   // POST /mcp/messages?sessionId=<id> — MCP JSON-RPC messages
   if (pathname === '/mcp/messages' && req.method === 'POST') {
+    injectMcpSessionFromProxyAuth(req, url);
     await handleMcpMessage(req, res, url);
     return;
   }
@@ -154,6 +282,13 @@ async function handleRequest(
   if (pathname === '/api/docs' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(documentStore.listDocuments()));
+    return;
+  }
+
+  // GET /getRepositoryInfo — stub for Cursor/MCP clients that probe localhost; returns minimal JSON to avoid retries
+  if (pathname === '/getRepositoryInfo' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ root: process.cwd() }));
     return;
   }
 
