@@ -35,6 +35,8 @@ export interface ChatMessage {
     function: { name: string; arguments: string };
   }>;
   toolCallId?: string;
+  /** Which LLM provider generated this message (set on assistant messages). */
+  providerId?: string;
 }
 
 export interface TodoItem {
@@ -62,6 +64,18 @@ export interface Session {
   suggestedFiles?: string[];
   /** Improvement suggestions from the review agent (file, line, suggestion text, optional snippet). */
   suggestedImprovements?: SuggestedImprovement[];
+  /**
+   * Tracks how many messages in `messages[]` have been sent to each provider.
+   * Used by sliced providers (claude_sdk, cursor) to avoid re-sending full history.
+   * Key: providerId, Value: message count already sent.
+   */
+  providerMessageCursors?: Record<string, number>;
+  /**
+   * Provider session id per provider (for resume). Cursor = Konstruct session id; claude_v2 = SDK id.
+   */
+  providerSessionIds?: Record<string, string>;
+  /** @deprecated Use providerSessionIds. Migrated on load. */
+  sdkSessionIds?: Record<string, string>;
 }
 
 /**
@@ -116,15 +130,21 @@ function serialize(s: Session): SessionSerialized {
 }
 
 function deserialize(raw: SessionSerialized): Session {
-  const ext = raw as SessionSerialized & { suggestedFiles?: string[]; suggestedImprovements?: SuggestedImprovement[] };
+  const ext = raw as SessionSerialized & {
+    suggestedFiles?: string[];
+    suggestedImprovements?: SuggestedImprovement[];
+    sdkSessionIds?: Record<string, string>;
+  };
   const suggested = ext.suggestedFiles;
   const improvements = ext.suggestedImprovements;
+  const providerSessionIds = ext.providerSessionIds ?? ext.sdkSessionIds;
   return {
     ...raw,
     createdAt: toValidDate(raw.createdAt),
     updatedAt: toValidDate(raw.updatedAt),
     suggestedFiles: Array.isArray(suggested) ? suggested : [],
     suggestedImprovements: Array.isArray(improvements) ? improvements : [],
+    providerSessionIds: providerSessionIds && Object.keys(providerSessionIds).length > 0 ? providerSessionIds : undefined,
   };
 }
 
@@ -285,6 +305,52 @@ export function updateSessionMessages(
   log.debug('updateSessionMessages', id, 'messages:', messages.length);
   if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
   return entry.session;
+}
+
+/**
+ * Update the provider message cursor for a session.
+ * After a successful run for a sliced provider (claude_sdk / cursor), call this with the
+ * current total non-system message count so the next run only sends new messages.
+ */
+export function updateProviderMessageCursor(
+  sessionId: string,
+  providerId: string,
+  cursor: number
+): void {
+  const entry = sessionById.get(sessionId);
+  if (!entry) return;
+  if (!entry.session.providerMessageCursors) entry.session.providerMessageCursors = {};
+  entry.session.providerMessageCursors[providerId] = cursor;
+  entry.session.updatedAt = new Date();
+  log.debug('updateProviderMessageCursor', sessionId, providerId, cursor);
+  if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
+}
+
+/**
+ * Set the provider session id for a provider (used for resume / --resume).
+ * For cursor this is the Konstruct session id; for claude_v2 this is the SDK-returned id.
+ */
+export function updateProviderSessionId(
+  sessionId: string,
+  providerId: string,
+  providerSessionId: string
+): void {
+  const entry = sessionById.get(sessionId);
+  if (!entry) return;
+  if (!entry.session.providerSessionIds) entry.session.providerSessionIds = {};
+  entry.session.providerSessionIds[providerId] = providerSessionId;
+  entry.session.updatedAt = new Date();
+  log.debug('updateProviderSessionId', sessionId, providerId, providerSessionId.slice(0, 8) + '…');
+  if (!entry.ephemeral) saveSessionToProject(entry.session, entry.projectId);
+}
+
+/** @deprecated Use updateProviderSessionId. */
+export function updateSdkSessionId(
+  sessionId: string,
+  providerId: string,
+  sdkSessionId: string
+): void {
+  updateProviderSessionId(sessionId, providerId, sdkSessionId);
 }
 
 /**

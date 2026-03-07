@@ -16,7 +16,8 @@
 
 /**
  * Invoke the Cursor CLI agent (agent --print) for a single prompt.
- * Spawns the installed `agent` (or `cursor agent`) binary with --print --trust --approve-mcps.
+ * Spawns the installed `agent` (or `cursor agent`) binary with --print --trust --approve-mcps --force
+ * so MCP tool calls are not rejected when run headless (no IDE).
  */
 
 import { spawn, type SpawnOptions } from 'node:child_process';
@@ -29,10 +30,14 @@ const DEFAULT_CURSOR_AGENT_PATH =
 
 /** Cursor API hosts that must not go through HTTP_PROXY (so Cursor's own API calls work). Merge into NO_PROXY when spawning the agent. */
 const CURSOR_NO_PROXY_HOSTS = 'api.cursor.sh,api1.cursor.sh,api2.cursor.sh';
+/** Exclude from NO_PROXY so the MCP bridge can use HTTP_PROXY when KONSTRUCT_SESSION_ID is not passed through by Cursor. */
+const PROXY_LOCALHOST = 'localhost,localhost.,127.0.0.1,.localhost';
 
 function mergeNoProxy(env: NodeJS.ProcessEnv): void {
   const existing = [env.NO_PROXY, env.no_proxy].filter(Boolean).join(',').split(',').map((s) => s.trim()).filter(Boolean);
-  const combined = [...new Set([...existing, ...CURSOR_NO_PROXY_HOSTS.split(',')])].join(',');
+  const noProxyLocal = new Set(PROXY_LOCALHOST.split(','));
+  const filtered = existing.filter((h) => !noProxyLocal.has(h));
+  const combined = [...new Set([...filtered, ...CURSOR_NO_PROXY_HOSTS.split(',')])].join(',');
   env.NO_PROXY = combined;
   env.no_proxy = combined;
 }
@@ -62,7 +67,7 @@ export interface CursorAgentResult {
 }
 
 function buildArgs(options: CursorAgentOptions, prompt: string): string[] {
-  const args: string[] = ['--print', '--trust', '--approve-mcps'];
+  const args: string[] = ['--print', '--trust', '--approve-mcps', '--force'];
   if (options.cwd?.trim()) {
     args.push('--workspace', options.cwd.trim());
   }
@@ -83,7 +88,7 @@ function buildArgs(options: CursorAgentOptions, prompt: string): string[] {
 
 /**
  * Invoke the Cursor CLI agent with the given prompt.
- * Uses --print --trust --approve-mcps; prompt is passed as the final argument.
+ * Uses --print --trust --approve-mcps --force; prompt is passed as the final argument.
  */
 export function invokeCursorAgent(
   prompt: string,

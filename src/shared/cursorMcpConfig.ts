@@ -29,7 +29,7 @@ const log = createLogger('cursor-mcp');
 const SERVER_NAME = 'konstruct';
 
 function getMcpUrl(): string {
-  // Use localhost. (trailing dot) so clients don't bypass proxy for "localhost"
+  // Use localhost. (trailing dot) so the client is forced to use the proxy; session id is injected via HTTP proxy username.
   const base =
     (typeof process !== 'undefined' && process.env?.KONSTRUCT_MCP_BASE_URL) ?? 'http://localhost.:3001';
   return base.replace(/\/$/, '') + '/mcp';
@@ -78,14 +78,21 @@ export async function ensureCursorMcpConfig(projectRoot: string): Promise<void> 
     }
     const mcpServers = (existing.mcpServers && typeof existing.mcpServers === 'object'
       ? { ...existing.mcpServers }
-      : {}) as Record<string, { url?: string }>;
+      : {}) as Record<string, { url?: string; command?: string; args?: string[] }>;
 
     // Remove legacy multi-entry Konstruct keys so only one remains
     delete mcpServers['konstruct-minimal'];
     delete mcpServers['konstruct-full'];
 
-    // Single entry; mode id (ask, implementation, etc.) is determined by session mapping (params.sessionId + params.mode/agentName)
-    mcpServers[SERVER_NAME] = { url: getMcpUrl() };
+    // Prefer command (stdio bridge) when the script exists: bridge inherits HTTP_PROXY so session id reaches the server. No curl required.
+    const bridgeScript = path.join(projectRoot, 'scripts', 'konstruct-mcp-bridge.mjs');
+    const useBridge = fs.existsSync(bridgeScript);
+    if (useBridge) {
+      mcpServers[SERVER_NAME] = { command: 'node', args: [bridgeScript] };
+      log.debug('ensureCursorMcpConfig using bridge (command)', bridgeScript);
+    } else {
+      mcpServers[SERVER_NAME] = { url: getMcpUrl() };
+    }
 
     const out = JSON.stringify({ mcpServers }, null, 2);
     fs.writeFileSync(mcpPath, out + '\n', 'utf-8');

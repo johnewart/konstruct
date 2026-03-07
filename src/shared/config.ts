@@ -68,6 +68,12 @@ export type ConfigProvider = {
   claude_sdk_path?: string;
   /** Cursor: path to Cursor agent CLI (e.g. agent or cursor); uses "agent" from PATH if unset. */
   cursor_agent_path?: string;
+  /**
+   * When true, this provider manages its own conversation state (e.g. Claude SDK, Cursor).
+   * Konstruct will only send new messages since the last run instead of the full history.
+   * Defaults to true for claude_sdk and cursor provider types; false for all others.
+   */
+  stateful?: boolean;
   /** Managed list of models (name + context window) for this provider. */
   models?: ProviderModel[];
   max_tokens?: number;

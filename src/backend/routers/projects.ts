@@ -27,6 +27,7 @@ import {
 } from '../../shared/config';
 import type { KonstructProject } from '../../shared/config';
 import { createLogger } from '../../shared/logger';
+import { getWorkspaceByProjectId } from '../workspace/resolver';
 
 const log = createLogger('projects');
 
@@ -133,6 +134,14 @@ export const projectsRouter = router({
       }
       setActiveProjectId(input.projectId);
       log.debug('setActive', input.projectId);
+      // Pre-warm workspace agent for the new project so tools (git, codebase, MCP) respond immediately
+      const workspace = getWorkspaceByProjectId(input.projectId);
+      if (workspace) {
+        workspace.getOrSpawnAgent().then(
+          () => log.debug('workspace agent ready for project', input.projectId),
+          (err) => log.debug('workspace agent spawn failed for project', input.projectId, err)
+        );
+      }
       return { projectId: getActiveProjectId() };
     }),
 

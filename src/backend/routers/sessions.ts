@@ -34,6 +34,7 @@ const messageSchema = z.object({
     )
     .optional(),
   toolCallId: z.string().optional(),
+  providerId: z.string().optional(),
 });
 
 export const sessionsRouter = router({

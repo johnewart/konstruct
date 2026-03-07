@@ -1926,6 +1926,21 @@ body {
   color: var(--app-accent);
 }
 
+.chat-message__provider-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 0.78em;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  border-radius: 4px;
+  background-color: var(--app-hover);
+  color: var(--app-text-muted);
+  border: 1px solid var(--app-border);
+  vertical-align: middle;
+}
+
 .chat-message__content {
   padding: 8px 0;
 }

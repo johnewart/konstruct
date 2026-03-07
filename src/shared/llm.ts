@@ -19,6 +19,7 @@ import { getOpenAIEnvAsync, getRunpodEnvAsync, getOllamaEnv, getContextWindowFor
 import * as anthropic from './anthropic';
 import * as bedrock from './bedrock';
 import { runSdkQuery, type McpProgressStore } from '../agent/claude-sdk-agent';
+import { runSdkV2Turn } from '../agent/claude-sdk-v2-agent';
 import { runCursorAgent } from '../agent/cursor-cli-agent';
 import { ensureCursorMcpConfig } from './cursorMcpConfig';
 import * as fs from 'node:fs';
@@ -35,6 +36,8 @@ export type ChatMessage = {
     function: { name: string; arguments: string };
   }>;
   toolCallId?: string;
+  /** Which LLM provider generated this message (set on assistant messages). */
+  providerId?: string;
 };
 
 export type ToolDefinition = {
@@ -121,12 +124,16 @@ type ChatOptions = {
   progressStore?: McpProgressStore;
   timeoutMs?: number;
   onMcpToolComplete?: (toolCallHistory: Array<{ id: string; name: string; arguments: string; result: string }>) => void;
+  /** Claude SDK V2: existing session id to resume; returned in response.sdkSessionId after first turn. */
+  sdkSessionId?: string;
 };
 
 type ChatResponse = {
   content: string;
   toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
   toolCallHistory?: Array<{ id: string; name: string; arguments: string; result: string }>;
+  /** Claude SDK V2: session id to persist for resume on next turn. */
+  sdkSessionId?: string;
 };
 
 type ChatHandler = (
@@ -195,25 +202,70 @@ const CHAT_HANDLERS: Record<string, ChatHandler> = {
     });
     return { content: result, toolCalls: undefined, toolCallHistory };
   },
+  claude_v2: async (messages, options, providerId, projectRoot, provider) => {
+    const apiKey =
+      (await resolveProviderSecret(projectRoot, providerId)) ??
+      (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) ??
+      '';
+    const env = { ...process.env } as Record<string, string | undefined>;
+    if (!apiKey) delete env.ANTHROPIC_API_KEY;
+    else env.ANTHROPIC_API_KEY = apiKey;
+    const sdkPath = getClaudeSdkPath(projectRoot, providerId);
+    const requestedModel = options.model ?? provider?.default_model;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedModel ?? '');
+    const model =
+      !requestedModel || requestedModel === 'default' || isUuid
+        ? 'claude-sonnet-4-5-20250929'
+        : requestedModel;
+    const systemMsg = messages.find((m) => m.role === 'system');
+    const userMessages = messages.filter((m) => m.role === 'user');
+    const lastUser = userMessages[userMessages.length - 1];
+    const messageToSend =
+      options.sdkSessionId || !systemMsg
+        ? (lastUser?.content ?? '')
+        : `[System]\n${systemMsg.content}\n\n[User]\n${lastUser?.content ?? ''}`;
+    const timeoutMs =
+      options.timeoutMs ??
+      (typeof process !== 'undefined' && process.env.KONSTRUCT_SDK_TIMEOUT_MS
+        ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
+        : 0);
+    const { result, sdkSessionId } = await runSdkV2Turn(messageToSend, {
+      model,
+      env,
+      signal: options.signal,
+      pathToClaudeCodeExecutable: sdkPath,
+      timeoutMs: Number.isNaN(timeoutMs) ? 0 : timeoutMs,
+      resumeSessionId: options.sdkSessionId,
+    });
+    return { content: result, toolCalls: undefined, toolCallHistory: undefined, sdkSessionId };
+  },
   cursor: async (messages, options, providerId, projectRoot, provider) => {
     log.debug('cursor provider: projectRoot', projectRoot ?? '(empty)');
-    if (projectRoot) await ensureCursorMcpConfig(projectRoot);
+    // MCP enabled by default; set KONSTRUCT_CURSOR_MCP_ENABLED=0 or false to disable
+    const cursorMcpDisabled =
+      typeof process !== 'undefined' &&
+      (process.env?.KONSTRUCT_CURSOR_MCP_ENABLED === '0' || process.env?.KONSTRUCT_CURSOR_MCP_ENABLED === 'false');
+    const cursorMcpEnabled = typeof process === 'undefined' || !cursorMcpDisabled;
+    if (cursorMcpEnabled && projectRoot) await ensureCursorMcpConfig(projectRoot);
     const prompt = buildMessagesPrompt(messages);
     const cursorPath = getCursorAgentPath(projectRoot, providerId);
     const model = options.model ?? provider?.default_model ?? undefined;
-    log.debug('cursor provider: binary', cursorPath ?? '(default from PATH)', 'cwd', projectRoot || undefined, 'model', model ?? '(default)', 'sessionId', options.sessionId ?? '(none)');
+    log.debug('cursor provider: binary', cursorPath ?? '(default from PATH)', 'cwd', projectRoot || undefined, 'model', model ?? '(default)', 'sessionId', options.sessionId ?? '(none)', 'mcp:', cursorMcpEnabled ? 'on' : 'off');
     const apiKey = await resolveProviderSecret(projectRoot, providerId);
     const env = typeof process !== 'undefined' && process.env ? { ...process.env } as Record<string, string | undefined> : undefined;
     if (env) {
       if (apiKey?.trim()) env.CURSOR_API_KEY = apiKey;
       else delete env.CURSOR_API_KEY;
-      // Route MCP through Konstruct proxy so session id is sent via Proxy-Authorization (cursor-cli-agent merges NO_PROXY for Cursor API hosts)
-      if (options.sessionId?.trim()) {
+      // Pass session id to the MCP bridge: env var (bridge adds to URL) and HTTP_PROXY (fallback if Cursor strips env when spawning the bridge).
+      if (cursorMcpEnabled && options.sessionId?.trim()) {
+        const sid = options.sessionId.trim();
+        env.KONSTRUCT_SESSION_ID = sid;
         const mcpBase = process.env.KONSTRUCT_MCP_BASE_URL ?? 'http://localhost.:3001';
         const parsed = new URL(mcpBase.replace(/\/$/, ''));
-        const proxyUrl = `http://${encodeURIComponent(options.sessionId.trim())}@${parsed.host}`;
-        env.HTTP_PROXY = proxyUrl;
-        env.http_proxy = proxyUrl;
+        const port = parsed.port || '3001';
+        const proxyHost = parsed.hostname === 'localhost.' ? 'localhost' : parsed.hostname;
+        env.HTTP_PROXY = `http://${encodeURIComponent(sid)}@${proxyHost}:${port}`;
+        env.http_proxy = env.HTTP_PROXY;
       }
     }
     const timeoutMs =
@@ -221,11 +273,12 @@ const CHAT_HANDLERS: Record<string, ChatHandler> = {
       (typeof process !== 'undefined' && process.env?.KONSTRUCT_SDK_TIMEOUT_MS
         ? parseInt(process.env.KONSTRUCT_SDK_TIMEOUT_MS, 10)
         : 0);
+    const resumeId = options.sdkSessionId ?? options.sessionId;
     const result = await runCursorAgent(prompt, {
       cursorPath: cursorPath ?? undefined,
       cwd: projectRoot || undefined,
       model: model ?? undefined,
-      sessionId: options.sessionId ?? undefined,
+      sessionId: resumeId ?? undefined,
       timeoutMs: Number.isNaN(timeoutMs) ? 0 : timeoutMs,
       env,
     });

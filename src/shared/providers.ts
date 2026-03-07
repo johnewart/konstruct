@@ -36,6 +36,7 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
   { id: 'anthropic', name: 'Anthropic' },
   { id: 'bedrock', name: 'AWS Bedrock' },
   { id: 'claude_sdk', name: 'Claude Code (SDK)' },
+  { id: 'claude_v2', name: 'Claude Code (SDK V2 resume)' },
   { id: 'cursor', name: 'Cursor Agent (CLI)' },
 ];
 
@@ -109,6 +110,14 @@ const providerAdapters: Record<string, ProviderAdapter> = {
     getDisplayUrl: (_projectRoot, p) => (p as { claude_sdk_path?: string }).claude_sdk_path ?? undefined,
     getDefaultModels: () => [{ id: 'default', name: 'Default' }],
   },
+  claude_v2: {
+    isConfigured: () => true,
+    getDisplayUrl: (_projectRoot, p) => (p as { claude_sdk_path?: string }).claude_sdk_path ?? undefined,
+    getDefaultModels: () => [
+      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
+      { id: 'default', name: 'Default' },
+    ],
+  },
   cursor: {
     isConfigured: () => true,
     getDisplayUrl: (_projectRoot, p) => (p as { cursor_agent_path?: string }).cursor_agent_path ?? undefined,
@@ -141,6 +150,7 @@ export function providerUsesDefaultModelOnly(type: string): boolean {
 export function getCanonicalProviderId(type: string, existingId?: string): string {
   const t = (type ?? '').toLowerCase();
   if (t === 'claude_sdk') return 'claude_sdk';
+  if (t === 'claude_v2') return 'claude_v2';
   if (t === 'cursor') return 'cursor';
   return existingId ?? '';
 }

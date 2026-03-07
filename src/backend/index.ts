@@ -131,18 +131,20 @@ async function handleProxyRequest(
       (req.headers as Record<string, string>)['x-konstruct-session-id'] = sessionId;
       internalUrl.searchParams.set('konstructSessionId', sessionId);
     }
-    log.info('proxy rewrite to MCP', internalUrl.toString());
+    log.info('proxy rewrite to MCP', { path: pathname, sessionId: sessionId ?? '(none)', url: internalUrl.toString() });
     if (pathname === '/mcp' && (req.method === 'GET' || req.method === 'POST')) {
-      if (req.method === 'POST') req.resume();
-      handleMcpSse(req, res, internalUrl, { proxied: true });
+      log.info('proxy: dispatching to handleMcpSse (SSE session)');
+      await handleMcpSse(req, res, internalUrl, { proxied: true });
       return;
     }
     if (pathname === '/mcp/messages' && req.method === 'POST') {
+      log.info('proxy: dispatching to handleMcpMessage (JSON-RPC)');
       await handleMcpMessage(req, res, internalUrl);
       return;
     }
   }
-  // If client asked for localhost (no port or :80), forward to this server so we return 404 instead of ECONNREFUSED (e.g. Cursor's getRepositoryInfo to localhost).
+  // If client asked for localhost (no port or :80), forward to this server. Nothing can listen on 80 without root, so
+  // e.g. Cursor's getRepositoryInfo to localhost would always fail; we rewrite so we can return our stub and avoid retries.
   const isLocalhost = targetUrl.hostname === 'localhost' || targetUrl.hostname === 'localhost.' || targetUrl.hostname === '127.0.0.1';
   const defaultPort = targetUrl.port === '' || targetUrl.port === '80';
   const rewrittenToSelf = isLocalhost && defaultPort;
@@ -205,9 +207,14 @@ async function handleRequest(
 
   const pathname = url.pathname;
 
-  // Diagnostic: when MCP is hit with origin form (no proxy), log raw req.url so we can see why proxy path wasn't used
+  // Diagnostic: when MCP is hit, log how we were reached (proxy vs direct)
   if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
-    log.info('mcp direct request', req.method, pathname, 'req.url=', rawUrl || '(empty)', looksLikeProxy ? '' : '(origin form; client not using HTTP_PROXY for this request)');
+    log.info('mcp request received', {
+      method: req.method,
+      pathname,
+      via: looksLikeProxy ? 'proxy' : 'direct',
+      url: rawUrl || '(empty)',
+    });
   }
 
   if (!pathname.startsWith('/trpc')) log.debug(req.method, pathname);
@@ -221,18 +228,11 @@ async function handleRequest(
     return;
   }
 
-  // MCP routes — log method/path for debugging connection issues
-  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
-    log.info('mcp request', req.method, pathname, url.search || '(no query)');
-  }
   // GET or POST /mcp — MCP SSE session (spec is GET; we accept POST for Cursor compatibility)
   if (pathname === '/mcp' && (req.method === 'GET' || req.method === 'POST')) {
-    if (req.method === 'POST') {
-      req.resume(); // drain body so the request stream is clean
-    }
+    log.info('mcp direct: opening SSE session', { search: url.search });
     injectMcpSessionFromProxyAuth(req, url);
-    log.info('mcp request URL (direct)', url.toString());
-    handleMcpSse(req, res, url, { proxied: false });
+    await handleMcpSse(req, res, url, { proxied: false });
     return;
   }
   if (pathname === '/mcp') {
@@ -244,6 +244,7 @@ async function handleRequest(
 
   // POST /mcp/messages?sessionId=<id> — MCP JSON-RPC messages
   if (pathname === '/mcp/messages' && req.method === 'POST') {
+    log.info('mcp direct: messages endpoint', { sessionId: url.searchParams.get('sessionId') });
     injectMcpSessionFromProxyAuth(req, url);
     await handleMcpMessage(req, res, url);
     return;

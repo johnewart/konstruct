@@ -59,12 +59,19 @@ interface McpSession {
   allowedTools?: Set<string>;
   /** Client session id from Cursor (params.sessionId); used to look up session -> mode. */
   clientSessionId?: string;
+  /** Set when SSE connection closed; session kept for grace period so client can still POST to /mcp/messages. */
+  closedAt?: number;
+  /** Timer for deferred cleanup after close. */
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 }
 
 const sessions = new Map<string, McpSession>();
 
 /** Client session id -> { modeId, allowedTools }. Cursor sends sessionId (and optionally mode) in params; we restrict tools by this. */
 const sessionModeMap = new Map<string, { modeId: string; allowedTools?: Set<string> }>();
+
+/** Pre-warm promise per project root so multiple MCP sessions for the same project only trigger one "resolving" / "ready" log and one spawn. */
+const prewarmByProjectRoot = new Map<string, Promise<void>>();
 
 /** If value is "${env:VAR}" (or quoted), return process.env[VAR] (server's env); otherwise return value. Cursor often sends the literal "${env:...}" without resolving; we resolve server-side so the Konstruct backend's env (e.g. KONSTRUCT_SESSION_ID) is used. */
 function interpolateEnvHeader(value: string | undefined): string | undefined {
@@ -84,16 +91,28 @@ function interpolateEnvHeader(value: string | undefined): string | undefined {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const MCP_LOG_TRUNCATE = 2000;
+
+function truncateForLog(s: string, max = MCP_LOG_TRUNCATE): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `… (${s.length - max} more chars)`;
+}
+
 /** Send an SSE event. Multi-line data is sent as multiple "data: " lines per the SSE spec. */
 function sendSseEvent(session: McpSession, event: string, data: string): void {
+  log.info('mcp SEND', { event, data: truncateForLog(data) });
+  if (session.closedAt) {
+    log.warn('mcp SSE: cannot send event (connection already closed)', event);
+    return;
+  }
   try {
     session.res.write(`event: ${event}\n`);
     for (const line of data.split('\n')) {
       session.res.write(`data: ${line}\n`);
     }
     session.res.write('\n');
-  } catch {
-    // Connection already closed — ignore
+  } catch (err) {
+    log.warn('mcp SSE: write failed (connection closed?)', event, err);
   }
 }
 
@@ -133,10 +152,15 @@ function getToolsForSession(session: McpSession): ReturnType<typeof toMcpTool>[]
 // JSON-RPC dispatcher
 // ---------------------------------------------------------------------------
 
+type JsonRpcResponse =
+  | { jsonrpc: '2.0'; id: string | number | null; result: unknown }
+  | { jsonrpc: '2.0'; id: string | number | null; error: { code: number; message: string } };
+
 async function dispatchRequest(
   body: { jsonrpc?: string; id?: unknown; method: string; params?: unknown },
   session: McpSession
-): Promise<void> {
+): Promise<JsonRpcResponse | null> {
+  log.info('mcp dispatch: handling', body.method);
   const id = (body.id as string | number | null) ?? null;
   const params = body.params as { sessionId?: string; mode?: string; agentName?: string; [k: string]: unknown } | undefined;
 
@@ -158,54 +182,60 @@ async function dispatchRequest(
     }
   }
 
-  const respond = (result: unknown) =>
-    sendSseEvent(session, 'message', JSON.stringify({ jsonrpc: '2.0', id, result }));
+  const sendViaSse = (response: JsonRpcResponse) => {
+    sendSseEvent(session, 'message', JSON.stringify(response));
+  };
 
-  const respondError = (code: number, message: string) =>
-    sendSseEvent(session, 'message', JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
+  const respond = (result: unknown): JsonRpcResponse => {
+    const response: JsonRpcResponse = { jsonrpc: '2.0', id, result };
+    sendViaSse(response);
+    return response;
+  };
+
+  const respondError = (code: number, message: string): JsonRpcResponse => {
+    const response: JsonRpcResponse = { jsonrpc: '2.0', id, error: { code, message } };
+    sendViaSse(response);
+    return response;
+  };
 
   switch (body.method) {
     case 'initialize': {
+      log.info('mcp dispatch: initialize — building tool list');
       const tools = getToolsForSession(session);
-      log.info('mcp initialize', 'tools:', tools.length);
-      respond({
+      log.info('mcp initialize: responding with', tools.length, 'tools');
+      return respond({
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
         serverInfo: { name: 'konstruct', version: '1.0.0' },
         // Include tools so clients that don't call tools/list still get the list (e.g. some Cursor MCP flows)
         tools,
       });
-      break;
     }
 
     case 'notifications/initialized':
-      // Notification — no response needed
-      break;
+      log.info('mcp dispatch: notifications/initialized (no response)');
+      return null;
 
     case 'tools/list': {
       const tools = getToolsForSession(session);
       log.info('mcp tools/list', 'count:', tools.length);
-      respond({ tools });
-      break;
+      return respond({ tools });
     }
 
     case 'tools/call': {
       const p = body.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
       if (!p?.name) {
-        respondError(-32602, 'Missing tool name');
-        return;
+        return respondError(-32602, 'Missing tool name');
       }
       const { allowedTools: effectiveAllowedTools } = getEffectiveSessionConfig(session);
       if (effectiveAllowedTools?.size && !effectiveAllowedTools.has(p.name)) {
-        respondError(-32602, `Tool "${p.name}" is not allowed in this session`);
-        return;
+        return respondError(-32602, `Tool "${p.name}" is not allowed in this session`);
       }
       const projectIdForCall = getProjectIdForRoot(session.projectRoot);
       if (projectIdForCall) {
         const disabledForCall = new Set(getDisabledToolsForProject(projectIdForCall));
         if (disabledForCall.has(p.name)) {
-          respondError(-32602, `Tool "${p.name}" is disabled for this project`);
-          return;
+          return respondError(-32602, `Tool "${p.name}" is disabled for this project`);
         }
       }
       log.debug('mcp tools/call', p.name, 'project:', session.projectRoot, 'backend:', isBackendTool(p.name));
@@ -216,24 +246,24 @@ async function dispatchRequest(
             sessionId: session.konstructSessionId,
           });
           const text = result.error ?? result.result ?? '';
-          respond({ content: [{ type: 'text', text }], isError: !!result.error });
+          return respond({ content: [{ type: 'text', text }], isError: !!result.error });
         } else {
           const workspace = getWorkspaceByProjectRoot(session.projectRoot);
           const conn = await workspace.getOrSpawnAgent();
           const result = await conn.executeTool(p.name, p.arguments ?? {});
           const text = result.error ?? result.result ?? '';
-          respond({ content: [{ type: 'text', text }], isError: !!result.error });
+          return respond({ content: [{ type: 'text', text }], isError: !!result.error });
         }
       } catch (err) {
-        respond({ content: [{ type: 'text', text: String(err) }], isError: true });
+        return respond({ content: [{ type: 'text', text: String(err) }], isError: true });
       }
-      break;
     }
 
     default:
       if (body.id != null) {
-        respondError(-32601, `Method not found: ${body.method}`);
+        return respondError(-32601, `Method not found: ${body.method}`);
       }
+      return null;
   }
 }
 
@@ -258,19 +288,48 @@ const PROXY_BASE_URL = (typeof process !== 'undefined' && process.env?.KONSTRUCT
 /**
  * GET /mcp — open an SSE session.
  * Claude connects here; we send back the messages endpoint as a full URL so the client can POST.
+ * For POST /mcp, reads and logs the request body (Cursor sends JSON here).
  * @param opts.proxied - If true, base URL uses localhost. so the client is forced through the proxy; if false, uses request Host (plain localhost for direct).
  */
-export function handleMcpSse(
+export async function handleMcpSse(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   url: URL,
   opts?: { proxied?: boolean }
-): void {
-  const mcpSessionId = crypto.randomUUID();
+): Promise<void> {
+  const recvHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v != null) recvHeaders[k] = Array.isArray(v) ? v.join(', ') : String(v);
+  }
+  log.info('mcp RECV (SSE session)', {
+    method: req.method,
+    url: url.pathname + url.search,
+    proxied: opts?.proxied,
+    headers: truncateForLog(JSON.stringify(recvHeaders), 800),
+  });
+
+  let postBody: { method?: string; id?: unknown; params?: unknown; jsonrpc?: string } | null = null;
+  if (req.method === 'POST' && req.readable) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const bodyRaw = Buffer.concat(chunks).toString();
+    log.info('mcp RECV (POST /mcp body)', { length: bodyRaw.length, body: truncateForLog(bodyRaw) });
+    try {
+      postBody = JSON.parse(bodyRaw) as typeof postBody;
+    } catch {
+      postBody = null;
+    }
+  }
+
+  const fallbackSessionId = crypto.randomUUID();
   const projectRoot = url.searchParams.get('projectRoot') ?? process.cwd();
   const modeId = url.searchParams.get('mode') ?? 'implementation';
   const xSessionHeader = Array.isArray(req.headers['x-konstruct-session-id']) ? req.headers['x-konstruct-session-id'][0] : req.headers['x-konstruct-session-id'];
   const konstructSessionId = url.searchParams.get('konstructSessionId') ?? interpolateEnvHeader(xSessionHeader) ?? undefined;
+  // Use conversation session id when present (e.g. from bridge via proxy) so the client can call back with it; otherwise use a random id.
+  const sessionKey = konstructSessionId ?? fallbackSessionId;
   let allowedTools: Set<string> | undefined;
   const allowedToolsParam = url.searchParams.get('allowedTools');
   if (allowedToolsParam?.length) {
@@ -293,7 +352,7 @@ export function handleMcpSse(
     if (getMode(agentModeKey)) effectiveModeId = agentModeKey;
   }
   const baseUrl = opts?.proxied ? PROXY_BASE_URL : getBaseUrl(req).replace(/^(https?:\/\/)localhost\./, '$1localhost');
-  const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${mcpSessionId}`;
+  const messagesUrl = `${baseUrl}/mcp/messages?sessionId=${sessionKey}`;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -301,26 +360,68 @@ export function handleMcpSse(
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
   });
+  const socket = res.socket as NodeJS.NetSocket | undefined;
+  if (socket?.setNoDelay) {
+    socket.setNoDelay(true);
+    log.debug('mcp SSE: setNoDelay(true) so endpoint event is sent immediately');
+  }
+  log.info('mcp SSE: response headers sent (200), sessionKey=', sessionKey, 'konstructSessionId=', konstructSessionId ?? '(none — session-scoped tools will fail)');
 
   const session: McpSession = { res, projectRoot, modeId: effectiveModeId, konstructSessionId, allowedTools };
-  sessions.set(mcpSessionId, session);
+  const existing = sessions.get(sessionKey);
+  if (existing?.cleanupTimer) {
+    clearTimeout(existing.cleanupTimer);
+    existing.cleanupTimer = undefined;
+  }
+  sessions.set(sessionKey, session);
 
-  // Send full URL so Claude (or any MCP client) can POST without knowing the server origin
-  log.debug('mcp SSE: sending endpoint', messagesUrl);
+  // Send full URL so client can POST with the same session id (conversation id when proxied) and we can look it up.
+  log.info('mcp SSE: sending endpoint event (client should POST to this URL)', { messagesUrl, sessionKey });
   sendSseEvent(session, 'endpoint', messagesUrl);
+
+  // Cursor sends initialize or tools/list in the POST /mcp body; respond on this SSE connection so the client gets server info and tools.
+  if (postBody?.method === 'initialize' && postBody.jsonrpc === '2.0') {
+    log.info('mcp SSE: responding to initialize from POST /mcp body');
+    await dispatchRequest(
+      { jsonrpc: postBody.jsonrpc, id: postBody.id, method: 'initialize', params: postBody.params },
+      session
+    );
+  } else if (postBody?.method === 'tools/list' && postBody.jsonrpc === '2.0') {
+    log.info('mcp SSE: responding to tools/list from POST /mcp body');
+    await dispatchRequest(
+      { jsonrpc: postBody.jsonrpc, id: postBody.id, method: 'tools/list', params: postBody.params ?? {} },
+      session
+    );
+  } else if (postBody?.method === 'tools/call' && postBody.jsonrpc === '2.0') {
+    log.info('mcp SSE: responding to tools/call from POST /mcp body', { name: (postBody.params as { name?: string })?.name });
+    await dispatchRequest(
+      { jsonrpc: postBody.jsonrpc, id: postBody.id, method: 'tools/call', params: postBody.params ?? {} },
+      session
+    );
+  }
+
+  log.info('mcp SSE: endpoint event sent; waiting for client to POST to /mcp/messages with sessionId=', sessionKey);
 
   // Keep-alive pings every 15 s to prevent proxy timeouts
   const ping = setInterval(() => {
     try { res.write(': ping\n\n'); } catch { clearInterval(ping); }
   }, 15_000);
 
+  const MCP_SESSION_GRACE_MS = 60_000;
   req.on('close', () => {
     clearInterval(ping);
-    sessions.delete(mcpSessionId);
-    log.debug('mcp session closed', mcpSessionId);
+    const s = sessions.get(sessionKey);
+    if (!s) return;
+    s.closedAt = Date.now();
+    s.cleanupTimer = setTimeout(() => {
+      sessions.delete(sessionKey);
+      if (s.cleanupTimer) clearTimeout(s.cleanupTimer);
+      log.info('mcp session removed after grace period', sessionKey);
+    }, MCP_SESSION_GRACE_MS);
+    log.info('mcp SSE connection closed (client disconnected); session kept for', MCP_SESSION_GRACE_MS / 1000, 's so client can still POST to /mcp/messages', sessionKey);
   });
 
-  log.info('mcp session opened', mcpSessionId, 'project:', projectRoot, 'mode:', effectiveModeId);
+  log.info('mcp session opened', { sessionKey, projectRoot, mode: effectiveModeId, activeSessions: sessions.size });
   const knownSessionIds = Array.from(sessions.keys());
   const knownSessionModes = Array.from(sessionModeMap.entries()).map(([id, cfg]) => ({ sessionId: id, modeId: cfg.modeId, allowedTools: cfg.allowedTools ? Array.from(cfg.allowedTools) : undefined }));
   log.debug('mcp known sessions', { sessionIds: knownSessionIds, sessionModes: knownSessionModes });
@@ -328,11 +429,30 @@ export function handleMcpSse(
     const mappingLines = Array.from(sessionModeMap.entries()).map(([sid, cfg]) => `  ${sid} -> ${cfg.modeId}${cfg.allowedTools ? ` (${cfg.allowedTools.size} tools)` : ''}`);
     log.info('mcp chat session -> mode mappings:\n' + mappingLines.join('\n'));
   }
+
+  // Pre-warm workspace agent so first tools/call from Cursor (and other clients) isn't slow (once per project root)
+  let prewarm = prewarmByProjectRoot.get(projectRoot);
+  if (!prewarm) {
+    log.debug('mcp pre-warm: resolving workspace for', projectRoot);
+    const workspace = getWorkspaceByProjectRoot(projectRoot);
+    prewarm = workspace
+      .getOrSpawnAgent()
+      .then(() => log.debug('mcp pre-warm: workspace agent ready', projectRoot))
+      .catch((err) => {
+        log.warn('mcp pre-warm: workspace agent spawn failed', projectRoot, err);
+        prewarmByProjectRoot.delete(projectRoot);
+      });
+    prewarmByProjectRoot.set(projectRoot, prewarm);
+    prewarm.finally(() => prewarmByProjectRoot.delete(projectRoot));
+  }
 }
+
+/** Methods that must return the JSON-RPC response in the POST body so clients that don't keep the SSE stream open (e.g. Cursor) still get the tool list. */
+const MCP_METHODS_RESPOND_IN_BODY = new Set(['initialize', 'tools/list']);
 
 /**
  * POST /mcp/messages?sessionId=<id> — receive a JSON-RPC request from Claude.
- * Returns 202 immediately; the actual JSON-RPC response is pushed via SSE.
+ * Returns 202 and pushes response via SSE when the client keeps the stream open; for initialize and tools/list we always return 200 with the response in the body so clients that disconnect after the endpoint event (e.g. Cursor) still get tools.
  */
 export async function handleMcpMessage(
   req: http.IncomingMessage,
@@ -340,7 +460,14 @@ export async function handleMcpMessage(
   url: URL
 ): Promise<void> {
   const sessionId = url.searchParams.get('sessionId');
+  log.info('mcp messages: request received', { sessionId, activeSessions: Array.from(sessions.keys()) });
   const session = sessionId ? sessions.get(sessionId) : undefined;
+
+  if (session?.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = undefined;
+    log.debug('mcp messages: cancelled session cleanup timer (client sent POST)');
+  }
 
   if (!session) {
     log.warn('mcp messages: session not found', { sessionId, activeSessions: sessions.size });
@@ -348,29 +475,48 @@ export async function handleMcpMessage(
     res.end(JSON.stringify({ error: 'MCP session not found', sessionId: sessionId ?? null }));
     return;
   }
-  log.debug('mcp messages: session found', sessionId);
+  log.info('mcp messages: session found, reading request body');
 
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
+  const bodyRaw = Buffer.concat(chunks).toString();
+  log.info('mcp RECV (POST /mcp/messages)', { sessionId, body: truncateForLog(bodyRaw) });
 
   let body: { jsonrpc?: string; id?: unknown; method: string; params?: unknown };
   try {
-    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+    body = JSON.parse(bodyRaw) as typeof body;
   } catch (err) {
     log.warn('mcp messages: invalid JSON', err);
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Invalid JSON' }));
     return;
   }
-  log.info('mcp messages: method', body.method);
+  log.info('mcp RECV parsed', { method: body.method, id: body.id, params: body.params != null ? truncateForLog(JSON.stringify(body.params), 500) : undefined });
 
-  // Acknowledge immediately; response travels via SSE
-  res.writeHead(202);
-  res.end();
-
-  dispatchRequest(body, session).catch((err) => {
-    log.error('mcp dispatch error', err);
-  });
+  const connectionClosed = !!session.closedAt;
+  const respondInBody = connectionClosed || MCP_METHODS_RESPOND_IN_BODY.has(body.method);
+  if (respondInBody) {
+    if (!connectionClosed && MCP_METHODS_RESPOND_IN_BODY.has(body.method)) {
+      log.info('mcp messages: returning', body.method, 'response in POST body (for clients that do not consume SSE after endpoint)');
+    } else if (connectionClosed) {
+      log.info('mcp messages: SSE connection already closed; will return response in POST body');
+    }
+    const response = await dispatchRequest(body, session);
+    if (response !== null) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(response));
+      log.info('mcp messages: sent 200 with response in body');
+    } else {
+      res.writeHead(202);
+      res.end();
+    }
+  } else {
+    res.writeHead(202);
+    res.end();
+    dispatchRequest(body, session).catch((err) => {
+      log.error('mcp dispatch error', err);
+    });
+  }
 }

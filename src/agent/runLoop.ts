@@ -66,6 +66,30 @@ export function getCombinedRules(projectRoot: string): string {
 
 const MAX_TOOL_RESULT_CHARS = 28 * 1024;
 
+/**
+ * Compute which messages to send to the provider. For stateful (sliced) providers:
+ * - First turn (no provider session id or messageCursor 0): send system + all messages since cursor.
+ * - Resuming (provider session id set and messageCursor > 0): send only new messages (no system, no prior history).
+ * Exported for tests.
+ */
+export function getChatMessagesForProvider(params: {
+  messages: llm.ChatMessage[];
+  providerId: string;
+  isSlicedProvider: boolean;
+  providerMessageCursors?: Record<string, number>;
+  providerSessionIds?: Record<string, string>;
+}): llm.ChatMessage[] {
+  const { messages, providerId, isSlicedProvider, providerMessageCursors, providerSessionIds } = params;
+  const messageCursor = isSlicedProvider ? (providerMessageCursors?.[providerId ?? ''] ?? 0) : 0;
+  const isResuming =
+    isSlicedProvider &&
+    (providerSessionIds?.[providerId ?? ''] != null) &&
+    messageCursor > 0;
+  if (isResuming) return messages.slice(messageCursor + 1);
+  if (isSlicedProvider) return [messages[0], ...messages.slice(messageCursor + 1)];
+  return messages;
+}
+
 /** Persist MCP tool call history to the session transcript (used incrementally and on SDK abort). */
 function persistMcpToolHistory(
   sessionId: string,
@@ -175,14 +199,14 @@ export async function runAgentLoop(
         '\n\n## Pull request context (for reference)\n\nThe following is the **proposed** PR (diff). Added (A) files are not in the repo yet; their content is only in this section.\n\n' +
         prContextText;
     }
-    const providerType =
+    const { providerType, providerConfig } =
       providerId && projectRoot
         ? (() => {
             const config = loadConfig(projectRoot);
-            const provider = getProviderById(config, providerId);
-            return (provider?.type ?? providerId).toLowerCase();
+            const p = getProviderById(config, providerId);
+            return { providerType: (p?.type ?? providerId).toLowerCase(), providerConfig: p };
           })()
-        : (providerId ?? '').toLowerCase();
+        : { providerType: (providerId ?? '').toLowerCase(), providerConfig: undefined };
     const additionalPrompt = providerType ? getProviderAdapter(providerType).additionalSystemPrompt?.() ?? '' : '';
     if (additionalPrompt) systemPrompt = systemPrompt + '\n\n' + additionalPrompt;
     const allTools = getToolsForMode(modeId);
@@ -206,6 +230,7 @@ export async function runAgentLoop(
         content: m.content,
         toolCalls: m.toolCalls,
         toolCallId: m.toolCallId,
+        providerId: m.providerId,
       })),
       { role: 'user', content },
     ];
@@ -219,6 +244,26 @@ export async function runAgentLoop(
       messages.filter((m) => m.role !== 'system') as sessionStore.ChatMessage[]
     );
 
+    // Providers whose context is managed externally (they run their own tool loop).
+    // For these we only send new messages since the last run, not the full history.
+    // Respects explicit `stateful` flag in provider config; falls back to type-based convention.
+    const isStatefulByType =
+      providerType === 'claude_sdk' || providerType === 'cursor' || providerType === 'claude_v2';
+    const isSlicedProvider = providerConfig?.stateful ?? isStatefulByType;
+    // Index into messages[] (excluding system at [0]) up to which we've already sent.
+    // messages = [system(0), ...session.messages(1..N), newUserMsg(N+1)]
+    // cursor is the count of session.messages already sent, so slice point = cursor + 1.
+    const messageCursor = isSlicedProvider
+      ? (session.providerMessageCursors?.[providerId ?? ''] ?? 0)
+      : 0;
+
+    // Ensure stateful providers have a session id for resume (cursor = Konstruct sessionId; claude_v2 overwrites with SDK id when returned).
+    if (isSlicedProvider && providerId && !session.providerSessionIds?.[providerId]) {
+      sessionStore.updateProviderSessionId(sessionId, providerId, sessionId);
+      session.providerSessionIds = session.providerSessionIds ?? {};
+      session.providerSessionIds[providerId] = sessionId;
+    }
+
     const maxIterations = Infinity;
     let iteration = 0;
 
@@ -226,8 +271,15 @@ export async function runAgentLoop(
       if (signal?.aborted) break;
       iteration++;
       let response: Awaited<ReturnType<typeof llm.chat>>;
+      const chatMessages = getChatMessagesForProvider({
+        messages,
+        providerId: providerId ?? '',
+        isSlicedProvider,
+        providerMessageCursors: session.providerMessageCursors,
+        providerSessionIds: session.providerSessionIds,
+      });
       try {
-        response = await llm.chat(messages, {
+        response = await llm.chat(chatMessages, {
           tools,
           providerId,
           model,
@@ -235,6 +287,7 @@ export async function runAgentLoop(
           signal,
           sessionId,
           progressStore,
+          sdkSessionId: session.providerSessionIds?.[providerId ?? ''],
           onMcpToolComplete: (toolCallHistory) => {
             persistMcpToolHistory(
               sessionId,
@@ -277,6 +330,9 @@ export async function runAgentLoop(
         }, 0); // Async, non-blocking
       }
 
+      if (response.sdkSessionId && providerId) {
+        sessionStore.updateSdkSessionId(sessionId, providerId, response.sdkSessionId);
+      }
       log.debug(
         'llm.chat returned',
         'sessionId:',
@@ -291,6 +347,7 @@ export async function runAgentLoop(
         messages.push({
           role: 'assistant',
           content: ' ',
+          providerId: providerId ?? undefined,
           toolCalls: response.toolCallHistory.map((th) => ({
             id: th.id,
             type: 'function',
@@ -316,6 +373,7 @@ export async function runAgentLoop(
         messages.push({
           role: 'assistant',
           content: response.content,
+          providerId: providerId ?? undefined,
         });
         sessionStore.updateSessionMessages(
           sessionId,
@@ -323,6 +381,13 @@ export async function runAgentLoop(
             (m) => m.role !== 'system'
           ) as sessionStore.ChatMessage[]
         );
+        if (isSlicedProvider && providerId) {
+          sessionStore.updateProviderMessageCursor(
+            sessionId,
+            providerId,
+            messages.filter((m) => m.role !== 'system').length
+          );
+        }
         break;
       }
 
@@ -330,6 +395,7 @@ export async function runAgentLoop(
         messages.push({
           role: 'assistant',
           content: response.content || ' ',
+          providerId: providerId ?? undefined,
           toolCalls: response.toolCalls,
         });
         // Persist assistant's tool decisions immediately so transcript/context is up to date
@@ -412,6 +478,7 @@ export async function runAgentLoop(
       messages.push({
         role: 'assistant',
         content: response.content,
+        providerId: providerId ?? undefined,
       });
       sessionStore.updateSessionMessages(
         sessionId,
@@ -419,6 +486,13 @@ export async function runAgentLoop(
           (m) => m.role !== 'system'
         ) as sessionStore.ChatMessage[]
       );
+      if (isSlicedProvider && providerId) {
+        sessionStore.updateProviderMessageCursor(
+          sessionId,
+          providerId,
+          messages.filter((m) => m.role !== 'system').length
+        );
+      }
       break;
     }
 

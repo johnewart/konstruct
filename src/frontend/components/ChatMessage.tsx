@@ -28,6 +28,8 @@ type Message = {
     id: string;
     function: { name: string; arguments: string };
   }>;
+  /** LLM provider that generated this message (shown as a badge on assistant messages). */
+  providerId?: string;
 };
 
 export const ChatMessage = React.memo(function ChatMessage({
@@ -51,7 +53,12 @@ export const ChatMessage = React.memo(function ChatMessage({
 
   return (
     <div className={`chat-message chat-message--${message.role}`}>
-      <div className="chat-message__role">{message.role}</div>
+      <div className="chat-message__role">
+        {message.role}
+        {message.providerId && (
+          <span className="chat-message__provider-badge">{message.providerId}</span>
+        )}
+      </div>
       <div className="chat-message__content">
         {isTool ? (
           showToolResultFull ? (

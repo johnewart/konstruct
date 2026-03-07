@@ -26,6 +26,9 @@ const log = createLogger('LocalWorkspace');
 const SERVER_URL = process.env.SERVER_URL ?? 'http://localhost:3001';
 const WAIT_MS = 15_000;
 
+/** Pending spawn promise per workspace id so concurrent getOrSpawnAgent() calls only spawn once. */
+const spawnByWorkspaceId = new Map<string, Promise<AgentConnection>>();
+
 export class LocalWorkspace implements Workspace {
   readonly id: string;
   readonly type = 'local' as const;
@@ -44,6 +47,20 @@ export class LocalWorkspace implements Workspace {
     const existing = registry.get(this.id);
     if (existing) return existing;
 
+    const pending = spawnByWorkspaceId.get(this.id);
+    if (pending) return pending;
+
+    const promise = this.spawnAgent();
+    spawnByWorkspaceId.set(this.id, promise);
+    try {
+      const conn = await promise;
+      return conn;
+    } finally {
+      spawnByWorkspaceId.delete(this.id);
+    }
+  }
+
+  private spawnAgent(): Promise<AgentConnection> {
     const cwd = process.cwd();
     const bundlePath = path.join(cwd, 'dist', 'workspace-agent.js');
     const sourcePath = path.join(cwd, 'src', 'agent', 'workspace-agent.ts');
@@ -73,7 +90,7 @@ export class LocalWorkspace implements Workspace {
       stderr += chunk.toString();
     });
 
-    return new Promise((resolve, reject) => {
+    return new Promise<AgentConnection>((resolve, reject) => {
       const failTimeout = setTimeout(() => {
         clearInterval(interval);
         if (!registry.get(this.id)) {
